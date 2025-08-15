@@ -1,0 +1,35 @@
+
+*** HOW TO APPLY THESE CHANGES ***
+
+1) Create a new branch:
+   git checkout -b feature/nws-provider
+
+2) Copy files into your repo at the same relative paths:
+   - xtrn/syncWXremix/providers/nws.js
+   - README_NWS_ADDENDUM.md
+
+3) Edit xtrn/syncWXremix/weather.js:
+   - load("providers/nws.js");
+   - Read modopts: provider, latitude, longitude, user_agent, station
+   - If provider === "nws": data = NWSProvider.load(lat, lon, ua, station);
+   - Pass data through convertNWS() (see README_NWS_ADDENDUM.md) to render with your existing panels.
+
+4) Update modopts.ini (system-wide or module-specific) with:
+   [syncWXremix]
+   provider = nws
+   latitude = <your-lat>
+   longitude = <your-lon>
+   user_agent = Retro Mafia BBS syncWXremix (sysop: <email>)
+
+5) Test from your BBS:
+   - Run the door; verify current conditions, forecast periods, and alerts display.
+   - Try with/without `station=` to confirm auto-pick of nearest station.
+   - Check that no external icon URL is used (ANSI iconset only).
+
+6) Commit and push:
+   git add xtrn/syncWXremix/providers/nws.js README_NWS_ADDENDUM.md
+   git commit -m "feat(nws): add National Weather Service provider and config docs"
+   git push origin feature/nws-provider
+
+If you want a ready-to-apply unified diff against your current tree, paste your
+`xtrn/syncWXremix/weather.js` here and I'll generate a precise patch.
