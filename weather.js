@@ -1,8 +1,8 @@
 //
-// syncWx-NWS-Remix v2.1 (c) 2025 Patrick Bass <patrick@pwbass.com>
+//	syncWx-NWS-Remix v2.1 (c) 2025 Patrick Bass <patrick@pwbass.com>
 //
-// RetroMafia BBS (retromafia.retrogoldbbs.com:8023)
-//       Respect the Legacy - Honor the Code
+//		 RetroMafia BBS (retromafia.retrogoldbbs.com:8023)
+//       			Respect the Legacy - Honor the Code
 //
 load("sbbsdefs.js");
 load("http.js");
@@ -34,7 +34,7 @@ var iconExt     = opts.weathericon_ext || DEFAULT_ICON_EXT;
 
 // --- Helpers ---
 function safePause(){ try{ if (console && console.pause) console.pause(); }catch(_){ } }
-function header(){ try{ console.clear(); }catch(_){ } print("\r\nRetroMafia BBS - Local Weather Report\r\n\r\n\n"); }
+function header(){ try{ console.clear(); }catch(_){ } print("SyncWx-NWS v2.1 by Patrick Bass - Local Weather Report"); }
 function showFail(title, reason, url){
   header();
   if (title)  print("ERROR: " + title + "\r\n");
@@ -287,7 +287,7 @@ function printIconFromNWSIconURL(iconURL, x, y){
         }
       }
       console.gotoxy(2, y + 3 + 3); // push cursor down a bit
-      put("\r\n" + gy + "syncWC-NWS-Remix (data: weather.gov)\r\n");
+      put("\r\n" + gy + "\r\n\r\nRetroMafia BBS | pwbass.com | Data source: weather.gov\r\n\r\n");
       safePause();
     } else {
       // Non-ANSI fallback
@@ -311,7 +311,7 @@ function printIconFromNWSIconURL(iconURL, x, y){
           }
         }
       }
-      put("RetroMafia BBS (retromafia.retrogoldbbs.com:8023) | syncWx-NWS-Remix v2.1 | Data source: weather.gov\r\n");
+      put("\r\n\r\nRetroMafia BBS | pwbass.com | Data source: weather.gov\r\n\r\n\r\n");
       safePause();
     }
 
