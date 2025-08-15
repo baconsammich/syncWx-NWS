@@ -1,193 +1,195 @@
-// xtrn/syncWXremix/providers/nws.js
-// National Weather Service provider for syncWXremix
-// Requires: Synchronet HTTPRequest (preferred). Falls back to fetch if available.
-(function(global) {
-  const BASE = "https://api.weather.gov";
+// providers/nws.js — NWSProvider
+// Returns structured {error:{...}} instead of throwing so callers can show useful diagnostics.
 
-  function httpJSON(url, ua) {
-    if (typeof HTTPRequest === "function") {
-      var req = new HTTPRequest();
-      req.AddHeader("User-Agent", ua);
-      req.AddHeader("Accept", "application/geo+json");
-      var body = req.Get(url);
-      if (req.response_code < 200 || req.response_code >= 300)
-        throw new Error("NWS " + req.response_code + " " + req.response_reason + " for " + url);
-      return JSON.parse(body);
-    }
-    if (typeof fetch === "function") {
-      return fetch(url, {
-        headers: { "User-Agent": ua, "Accept": "application/geo+json" }
-      }).then(res => {
-        if (!res.ok) throw new Error("NWS " + res.status + " " + res.statusText + " for " + url);
-        return res.json();
-      });
-    }
-    throw new Error("No HTTP client available (HTTPRequest or fetch).");
-  }
+var NWSProvider = (function () {
 
-  function pickNearestStation(stationsLD) {
-    if (stationsLD && stationsLD.observationStations && stationsLD.observationStations.length)
-      return stationsLD.observationStations[0].split("/").pop();
-    if (stationsLD && stationsLD["@graph"] && stationsLD["@graph"].length)
-      return stationsLD["@graph"][0].stationIdentifier;
-    return null;
-  }
-
-  function qvTo(valueObj, target) {
-    if (!valueObj || valueObj.value == null) return null;
-    const v = valueObj.value;
-    const u = (valueObj.unitCode || "").toLowerCase();
-    switch (target) {
-      case "F":
-        if (u.indexOf("degc") >= 0) return (v * 9/5) + 32;
-        if (u.indexOf("degf") >= 0) return v;
-        return v;
-      case "mph":
-        if (u.indexOf("m_s-1") >= 0) return v * 2.23693629;
-        if (u.indexOf("km_h-1") >= 0) return v * 0.621371;
-        if (u.indexOf("kn") >= 0) return v * 1.15078;
-        return v;
-      case "inHg":
-        if (u.indexOf("pa") >= 0) return v / 3386.389;
-        if (u.indexOf("hpa") >= 0) return v / 33.86389;
-        return v;
-      case "mi":
-        if (u.indexOf("m") >= 0) return v / 1609.344;
-        return v;
-      case "%":
-        return v;
-      default:
-        return v;
-    }
-  }
-
-  function mapShortForecastToIcon(shortText) {
-    if (!shortText) return "na";
-    const s = shortText.toLowerCase();
-    if (s.includes("thunder")) return "tsra";
-    if (s.includes("snow")) return "snow";
-    if (s.includes("sleet") || s.includes("wintry")) return "sleet";
-    if (s.includes("freezing")) return "fzra";
-    if (s.includes("rain") || s.includes("showers")) return "rain";
-    if (s.includes("drizzle")) return "rain";
-    if (s.includes("hail")) return "hail";
-    if (s.includes("fog") || s.includes("mist")) return "fog";
-    if (s.includes("haze") || s.includes("smoke")) return "haze";
-    if (s.includes("wind")) return "wind";
-    if (s.includes("cloudy")) return "ovc";
-    if (s.includes("partly")) return "sct";
-    if (s.includes("mostly")) return "bkn";
-    if (s.includes("sunny") || s.includes("clear")) return "skc";
-    return "ovc";
-  }
-
-  function normalizeForecastPeriods(periods) {
-    return periods.map(p => ({
-      name: p.name || "",
-      start: p.startTime,
-      end: p.endTime,
-      isDay: !!p.isDaytime,
-      tempF: typeof p.temperature === "object" ? qvTo(p.temperature, "F") : (p.temperatureUnit === "C" ? (p.temperature * 9/5 + 32) : p.temperature),
-      windDir: p.windDirection || "",
-      wind: (typeof p.windSpeed === "string") ? p.windSpeed : (p.windSpeed ? Math.round(qvTo(p.windSpeed, "mph")) + " mph" : ""),
-      gust: (typeof p.windGust === "string") ? p.windGust : (p.windGust ? Math.round(qvTo(p.windGust, "mph")) + " mph" : ""),
-      pop: p.probabilityOfPrecipitation ? Math.round((p.probabilityOfPrecipitation.value || 0)) : null,
-      short: p.shortForecast || "",
-      detailed: p.detailedForecast || "",
-      iconKey: mapShortForecastToIcon(p.shortForecast || "")
-    }));
-  }
-
-  function normalizeObservation(obs) {
-    const P = obs.properties;
-    return {
-      when: P.timestamp,
-      text: P.textDescription || "",
-      tempF: P.temperature && P.temperature.value != null ? Math.round(qvTo(P.temperature, "F")) : null,
-      dewF: P.dewpoint && P.dewpoint.value != null ? Math.round(qvTo(P.dewpoint, "F")) : null,
-      rh: P.relativeHumidity && P.relativeHumidity.value != null ? Math.round(qvTo(P.relativeHumidity, "%")) : null,
-      windDirDeg: P.windDirection && P.windDirection.value != null ? Math.round(P.windDirection.value) : null,
-      windMph: P.windSpeed && P.windSpeed.value != null ? Math.round(qvTo(P.windSpeed, "mph")) : null,
-      gustMph: P.windGust && P.windGust.value != null ? Math.round(qvTo(P.windGust, "mph")) : null,
-      visMi: P.visibility && P.visibility.value != null ? (qvTo(P.visibility, "mi")).toFixed(1) : null,
-      pressureIn: P.barometricPressure && P.barometricPressure.value != null ? (qvTo(P.barometricPressure, "inHg")).toFixed(2) : null
-    };
-  }
-
-  function normalizeAlerts(collection) {
-    const feats = collection.features || [];
-    return feats.map(f => {
-      const a = f.properties;
-      return {
-        id: a.id,
-        event: a.event,
-        headline: a.headline || a.event,
-        severity: a.severity,
-        urgency: a.urgency,
-        certainty: a.certainty,
-        effective: a.effective,
-        expires: a.expires,
-        area: a.areaDesc,
-        instruction: a.instruction || "",
-      };
-    });
-  }
-
-  function getRelLoc(props) {
-    if (props && props.relativeLocation && props.relativeLocation.properties) {
-      var rl = props.relativeLocation.properties;
-      var city = rl.city || "";
-      var state = rl.state || "";
-      if (city && state) return city + ", " + state;
-      if (city) return city;
-      if (state) return state;
-    }
-    return null;
-  }
-
-  function syncOrPromise(v) {
-    // In Synchronet, httpJSON returns sync object; in browsers it returns Promise.
-    if (v && typeof v.then === "function") {
-      // Not ideal for true async, but we expect sbbs path.
-      throw new Error("Asynchronous fetch not supported in this runtime.");
-    }
-    return v;
-  }
-
-  function loadNWS(lat, lon, ua, preferredStationId) {
-    var pt = syncOrPromise(httpJSON(BASE + "/points/" + lat + "," + lon, ua));
-    var props = pt.properties;
-    var forecastURL = props.forecast;
-    var stationsURL = props.observationStations;
-    var zoneId = (props.forecastZone || "").split("/").pop();
-    var countyId = (props.county || "").split("/").pop();
-
-    var f = syncOrPromise(httpJSON(forecastURL + "?units=us", ua));
-    var periods = normalizeForecastPeriods(f.properties.periods || []);
-
-    var stationId = preferredStationId;
-    if (!stationId) {
-      var st = syncOrPromise(httpJSON(stationsURL, ua));
-      stationId = pickNearestStation(st);
-    }
-    var current = null;
-    if (stationId) {
-      var latest = syncOrPromise(httpJSON(BASE + "/stations/" + stationId + "/observations/latest?require_qc=true", ua));
-      current = normalizeObservation(latest);
+    function safeGet(o, path) {
+        try {
+            var parts = path.split(".");
+            var cur = o;
+            for (var i = 0; i < parts.length; i++) {
+                if (cur == null) return null;
+                cur = cur[parts[i]];
+            }
+            return cur;
+        } catch (e) { return null; }
     }
 
-    var alerts = syncOrPromise(httpJSON(BASE + "/alerts/active?point=" + lat + "," + lon, ua));
+    function getPoint(http, lat, lon) {
+        return http.getJSON(
+            "https://api.weather.gov/points/" + String(lat) + "," + String(lon),
+            "application/ld+json, application/geo+json, application/json"
+        );
+    }
+    function getForecast(http, url) {
+        if (!url) return null;
+        return http.getJSON(url, "application/ld+json, application/geo+json, application/json");
+    }
+    function getObservation(http, stationId) {
+        if (!stationId) return null;
+        return http.getJSON(
+            "https://api.weather.gov/stations/" + stationId + "/observations/latest?require_qc=false",
+            "application/geo+json, application/json"
+        );
+    }
+    function getAlertsForState(http, stateCode) {
+        if (!stateCode) return null;
+        return http.getJSON(
+            "https://api.weather.gov/alerts/active?area=" + encodeURIComponent(stateCode),
+            "application/geo+json, application/ld+json, application/json"
+        );
+    }
+    function pickFirstStation(http, stationsUrl) {
+        if (!stationsUrl) return null;
+        var json = http.getJSON(
+            stationsUrl + (stationsUrl.indexOf("?") > 0 ? "&" : "?") + "limit=1",
+            "application/geo+json, application/json"
+        );
+        try {
+            if (json && json.features && json.features.length) {
+                var p = json.features[0].properties;
+                return p && p.stationIdentifier ? p.stationIdentifier : null;
+            }
+        } catch (e) {}
+        return null;
+    }
+    function inferStateFromPoint(point) {
+        try {
+            var countyUrl = safeGet(point, "properties.county");
+            if (!countyUrl) return null;
+            var id = countyUrl.split("/").pop(); // e.g., KSZ091
+            var state2 = id.substring(0, 2);     // KS
+            return /^[A-Z]{2}$/.test(state2) ? state2 : null;
+        } catch (e) { return null; }
+    }
 
-    return {
-      location: getRelLoc(props) || ("Lat " + lat + ", Lon " + lon),
-      zoneId: zoneId,
-      countyId: countyId,
-      stationId: stationId,
-      forecast: periods,
-      current: current,
-      alerts: normalizeAlerts(alerts)
-    };
-  }
+    function load(ctx) {
+        if (!ctx || !ctx.http || typeof ctx.http.getJSON !== "function")
+            return { error: { stage: "init", message: "invalid http context" } };
 
-  global.NWSProvider = { load: loadNWS };
-})(this);
+        var http = ctx.http, lat = ctx.latitude, lon = ctx.longitude;
+
+        var pin = getPoint(http, lat, lon);
+        // If the door context failed to attach UA, we’ll see __transport_error or no properties.
+        if (!pin || pin.__transport_error || !pin.properties) {
+            return {
+                error: {
+                    stage: "points",
+                    message: "points lookup failed",
+                    transport: pin ? pin.__transport_error : "no-response",
+                    url: pin && pin.__url ? pin.__url : ("https://api.weather.gov/points/" + lat + "," + lon),
+                    sample: pin && pin.__raw ? pin.__raw : null
+                },
+                point: pin
+            };
+        }
+
+        var forecastUrl = safeGet(pin, "properties.forecast");
+        var hourlyUrl   = safeGet(pin, "properties.forecastHourly");
+        var forecast    = getForecast(http, forecastUrl);
+        var hourly      = getForecast(http, hourlyUrl);
+
+        var stationId   = ctx.station || pickFirstStation(http, safeGet(pin, "properties.observationStations"));
+        var observation = getObservation(http, stationId);
+
+        var st = inferStateFromPoint(pin);
+        var alerts = st ? getAlertsForState(http, st) : null;
+
+        return {
+            point: pin,
+            forecast: forecast,
+            hourly: hourly,
+            observation: observation,
+            stationId: stationId || null,
+            alerts: alerts
+        };
+    }
+
+    function iconKeyFromShortForecast(sf, isDay) {
+        if (!sf) return "unknown";
+        var s = String(sf).toLowerCase();
+        if (s.indexOf("thunder")>=0) return isDay ? "tstorms" : "nt_tstorms";
+        if (s.indexOf("snow")>=0 || s.indexOf("flurr")>=0) return isDay ? "snow" : "nt_snow";
+        if (s.indexOf("sleet")>=0 || s.indexOf("freezing")>=0 || s.indexOf("ice")>=0) return isDay ? "sleet" : "nt_sleet";
+        if (s.indexOf("rain")>=0 || s.indexOf("showers")>=0 || s.indexOf("drizzle")>=0) return isDay ? "rain" : "nt_rain";
+        if (s.indexOf("cloud")>=0 || s.indexOf("overcast")>=0) return isDay ? "cloudy" : "nt_cloudy";
+        if (s.indexOf("partly")>=0 || s.indexOf("mostly")>=0) return isDay ? "partlycloudy" : "nt_partlycloudy";
+        if (s.indexOf("clear")>=0 || s.indexOf("sunny")>=0) return isDay ? "clear" : "nt_clear";
+        return isDay ? "cloudy" : "nt_cloudy";
+    }
+
+    function convert(data) {
+        var out = {
+            location_full: null,
+            conditions: null,
+            temp_string: null,
+            sunrise: null,
+            sunset: null,
+            moon_phase: null,
+            wind_string: null,
+            forecast: [],
+            icon_key_daynight: null,
+            icon_key_day: null,
+            alert: null
+        };
+
+        try {
+            var rl = safeGet(data, "point.properties.relativeLocation.properties");
+            if (rl && rl.city) out.location_full = rl.city + (rl.state ? ", " + rl.state : "");
+        } catch (e) {}
+
+        try {
+            var p0 = safeGet(data, "forecast.properties.periods.0");
+            if (p0) {
+                out.icon_key_daynight = iconKeyFromShortForecast(p0.shortForecast, !!p0.isDaytime);
+                out.icon_key_day = iconKeyFromShortForecast(p0.shortForecast, true);
+            }
+        } catch (e) {}
+
+        try {
+            var periods = safeGet(data, "forecast.properties.periods") || [];
+            var unitLbl;
+            for (var i = 0; i < periods.length && out.forecast.length < 4; i++) {
+                var p = periods[i]; if (!p) continue;
+                var isDay = !!p.isDaytime;
+                var low=null, high=null;
+                unitLbl = p.temperatureUnit === "C" ? "°C" : "°F";
+                if (typeof p.temperature === 'number') {
+                    if (isDay) high = p.temperature; else low = p.temperature;
+                }
+                out.forecast.push({
+                    weekday: p.name || "",
+                    cond_short: p.shortForecast || "",
+                    low_label: low  !== null ? "Low  " : "",
+                    high_label: high !== null ? "High " : "",
+                    low:  low  !== null ? String(low)  : "",
+                    high: high !== null ? String(high) : "",
+                    unit: unitLbl
+                });
+            }
+        } catch (e) {}
+
+        try {
+            var a = data.alerts;
+            if (a) {
+                var alertObj = null;
+                if (a.features && a.features.length) alertObj = a.features[0].properties;
+                else if (a["@graph"] && a["@graph"].length) alertObj = a["@graph"][0];
+                if (alertObj) {
+                    out.alert = {
+                        event:   alertObj.event || null,
+                        title:   alertObj.headline || alertObj.event || null,
+                        sent:    alertObj.sent || null,
+                        expires: alertObj.expires || null,
+                        ends:    alertObj.ends || null,
+                        area:    alertObj.areaDesc || null
+                    };
+                }
+            }
+        } catch (e) {}
+
+        return out;
+    }
+
+    return { load: load, convert: convert };
+})();

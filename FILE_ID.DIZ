@@ -1,12 +1,12 @@
---=#@~ syncWXremix 1.04 -by- KenDB3 ~@#=--
-Javascript Weather Door for Synchronet
-BBSes. Set up as a Door, Logon Event, or
-both. Works based on the IP of the user
-when they connect. GeoIP lookup and data
-provided by Weather Underground. Features:
-Location (via GeoIP), Current Conditions,
-Temp, Sunrise/set, Lunar Phase, UV Index,
-3-day Forecast & Severe Alerts for the US.
- http://bbs.kd3.us -- telnet://bbs.kd3.us
-  https://github.com/KenDB3/syncWXremix/
-------------------------------------------
+--=#@~ syncWx-NWS 2.1 -by- Patrick Bass (D2SK) ~@#=--
+JavaScript Weather Door for Synchronet BBSes
+Fork of syncWXremix by KenDB3, updated to use
+the National Weather Service API. Can run as
+a Door, Logon Event, or both. Uses the BBS
+user’s City/State to geocode location for
+local weather. Features: Location, Current
+Conditions, Temp, Sunrise/Sunset, Lunar Phase,
+4-period Forecast & Severe Alerts (US only).
+Retro Mafia BBS: telnet://retromafia.retrogoldbbs.com:8023
+https://github.com/pwbass/syncWx-NWS
+----------------------------------------------

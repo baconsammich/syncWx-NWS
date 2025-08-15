@@ -1,73 +1,137 @@
+===============================================================================
+                  syncWx-NWS  —  Local Weather via weather.gov
+===============================================================================
+Author: Patrick Bass (patrick@pwbass.com)  
+Version: 1.0  
+Date: August 2025  
+Requirements: Synchronet BBS v3.20+ with JavaScript enabled, ANSI-capable terminal
+===============================================================================
 
-- **latitude / longitude**: Your location in decimal degrees (Google Maps can provide these).
-- **user_agent**: Identify your BBS and include contact info.
-- **weathericon_ext**: File extension of your primary icon set (.asc or .ans).
-- **fallback_type**:  
-    - `bbsip` — automatically detect caller’s IP for location  
-    - `nonip` — use `fallback` value (ZIP, ICAO, or IATA code)
-- **fallback**: Only required if `fallback_type = nonip`.
+INTRODUCTION
+------------
+syncWx-NWS is a drop-in JavaScript module for Synchronet BBS systems that
+fetches current weather conditions and forecasts directly from the U.S.
+National Weather Service (NWS) API. It automatically determines the
+logged-in user's location (City, State) from their BBS user record,
+geocodes it into latitude/longitude, and retrieves:
 
---------------------
+ - Current conditions
+ - Current temperature in °F and °C
+ - Sunrise and sunset times
+ - Lunar phase
+ - Wind direction and speed
+ - Up to four forecast periods (today, tonight, tomorrow, etc.)
+ - NWS-issued weather alerts for that location
 
-II) External Program Configuration
+It also displays ANSI weather icons if your system supports them.
 
-**Weather App (weather.js)**
+===============================================================================
 
-[weather.js]
- 1: Name                       Your Local Weather
- 2: Internal Code              SYNCWX
- 3: Start-up Directory         ../xtrn/syncWX/
- 4: Command Line               ?weather.js
- 5: Clean-up Command Line      
- 6: Execution Cost             None
- 7: Access Requirements        
- 8: Execution Requirements     
- 9: Multiple Concurrent Users  Yes
-10: Intercept Standard I/O     No
-11: Native (32-bit) Executable No
-12: Use Shell to Execute       No
-13: Modify User Data           No
-14: Execute on Event           No (or "Logon" to auto-run)
-15: Pause After Execution      No
-16: BBS Drop File Type         None
-17: Place Drop File In         Node Directory
-18: Time Options...
+FEATURES
+--------
+ - Uses the official weather.gov API for U.S. locations.
+ - Automatically geocodes user City/State to coordinates.
+ - Fallback to configured lat/lon if user location is blank.
+ - Displays forecast data alongside ANSI art weather icons.
+ - Works in console (jsexec) or from the BBS as an external program.
+ - Handles missing data gracefully.
+ - BBS-safe text output with color for readability.
+ - No commercial API keys required.
 
---------------------
+===============================================================================
 
-**Icon Viewer (iconset.js)**
+INSTALLATION
+------------
 
-[iconset.js]
- 1: Name                       View Icon Set
- 2: Internal Code              WTHRICON
- 3: Start-up Directory         ../xtrn/syncWX/
- 4: Command Line               ?iconset.js
- 5: Clean-up Command Line      
- 6: Execution Cost             None
- 7: Access Requirements        LEVEL 90
- 8: Execution Requirements     
- 9: Multiple Concurrent Users  Yes
-10: Intercept Standard I/O     No
-11: Native (32-bit) Executable No
-12: Use Shell to Execute       No
-13: Modify User Data           No
-14: Execute on Event           No
-15: Pause After Execution      No
-16: BBS Drop File Type         None
-17: Place Drop File In         Node Directory
-18: Time Options...
+1.  **Copy Files**
+    Place the following files in your Synchronet external program directory
+    (e.g., `/sbbs/xtrn/syncwx-nws/`):
 
---------------------
+        weather.js        — Main program file
+        wxlanguage.js     — Language strings (optional, defaults to English)
+        icons/*.asc       — Weather icon set (ANSI/ASCII)
 
-III) Icon Files
+    You may use any icon pack that matches the NWS icon keywords.
 
-Icons are stored in `icons/` and come in ANSI (.ans) and ASCII (.asc) versions.  
-The `.asc` icons are automatically used for callers without ANSI capability.  
-For ANSI callers with monochrome terminals, the color information will be removed but ANSI layout preserved.
+2.  **Configure modopts.ini (optional)**
+    Edit `/sbbs/ctrl/modopts.ini` and add:
 
-If you design custom icons:
-- Keep both ANSI and ASCII sets.
-- Set `weathericon_ext` in `modopts.ini` to your preferred set.
-- Test with color ANSI, mono ANSI, and pure ASCII callers to ensure readability.
+        [SyncWX]
+        user_agent = RetroMafia BBS (hello@retrogoldbbs.com)
+        email = hello@retrogoldbbs.com
+        weathericon_ext = .asc
+        ; Optional fallback location if user has no City/State:
+        latitude = 35.3880338
+        longitude = -94.4265011
+        location_name = Fort Smith, AR
 
---------------------
+3.  **Add External Program Entry**
+    In `SCFG -> External Programs -> External Programs`, add a new entry:
+
+        Name         : SyncWX-NWS
+        Internal Code: SYNCWX
+        Start-up Dir : ../xtrn/syncwx-nws
+        Command Line : ?weather.js
+        Settings     : Native, Xtrn, ANSI
+
+4.  **Ensure Internet Access**
+    Your BBS server must be able to make outbound HTTPS requests to:
+        - api.weather.gov
+        - nominatim.openstreetmap.org
+
+5.  **Test from Console**
+    From `/sbbs/exec`, run:
+        jsexec ../xtrn/syncwx-nws/weather.js
+
+    Verify that the weather report displays correctly.
+
+===============================================================================
+
+USAGE
+-----
+When run from the BBS, syncWx-NWS:
+  1. Reads the logged-in user's City, State from their BBS record.
+  2. Queries OpenStreetMap's Nominatim service to convert City/State to lat/lon.
+  3. Calls weather.gov's `/points` API to determine the forecast grid.
+  4. Retrieves current conditions, forecast, and alerts.
+  5. Displays the weather icon on the left and textual data on the right.
+  6. Pauses for the user before returning to the BBS.
+
+From the console (`jsexec`), the same process occurs without requiring a logged-in user.
+
+===============================================================================
+
+NOTES
+-----
+ - **U.S. Only:** NWS data covers only the United States and its territories.
+ - **City/State Formatting:** User location should be in the format `City, ST`.
+ - **ANSI Support:** Icons require an ANSI-capable terminal.
+ - **Wind Display:** Wind is shown as degrees from north + mph.
+ - **No UV Index:** The NWS API does not provide UV Index; this program omits it.
+
+===============================================================================
+
+TROUBLESHOOTING
+---------------
+Problem: "points lookup failed"
+Cause  : Invalid coordinates or API outage.
+Fix    : Check user location format or fallback coordinates in modopts.ini.
+
+Problem: No icons displayed
+Cause  : Missing icon files or mismatched names.
+Fix    : Ensure `/icons/` folder exists with `.asc` icons that match NWS codes.
+
+Problem: No data / HTTP error
+Cause  : Firewall or network restrictions.
+Fix    : Allow outbound HTTPS to weather.gov and nominatim.openstreetmap.org.
+
+===============================================================================
+
+CREDITS
+-------
+Weather data:  U.S. National Weather Service (weather.gov)  
+Geocoding:     OpenStreetMap Nominatim  
+Icons:         Various ANSI artists (credit in icon pack)  
+Code:          Patrick Bass (patrick@pwbass.com)  
+
+===============================================================================

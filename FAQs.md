@@ -1,66 +1,80 @@
-Q: When running syncWXremix as a 'logon' event, the app is displaying information from a previous login? This can be reproduced by connecting from two different locations. If it is run as a door/external, it shows the correct location. 
+===============================================================================
+FAQ — syncWx-NWS
+===============================================================================
 
-A: It has more to do with Synchronet than the syncWXremix script. It was a bug reported to digital man that he fixed on December 16, 2015. However, the fix requires you to make or grab a new build of Synchronet, or at least a build that is after Dec 16 2015 12:13 am PST. Here is the relevant CVS info: [CVS Commit for the fix](http://cvs.synchro.net/commitlog.ssjs#32554)
+Q: When running syncWx-NWS as a 'logon' event, the weather sometimes shows
+   the wrong location for the current caller. Why?
 
--------------------------------------------------------
+A: This is usually due to how Synchronet caches user information between
+   nodes. If the script is run before Synchronet updates the `user.location`
+   field for the current session, it may display stale data from the previous
+   caller on that node.
 
-Q: What is fallback_type and fallback for?
+   This was a known Synchronet bug that Digital Man fixed on Dec 16, 2015.
+   To ensure correct behavior, update to any Synchronet build after that date:
+   http://cvs.synchro.net/commitlog.ssjs#32554
 
-A: This script will give the weather to your caller based on their IP address they are connecting from. If, for some reason, it cannot determine an IP address, or it finds a local IP address, it will fall back to something you define, like using the IP of the local BBS. However, you can change this functionality by changing fallback_type from bbsip to nonip. You must then choose what to put in fallback. Options include:
+   Alternatively, run syncWx-NWS as an external door rather than an automatic
+   logon event — this guarantees that the correct user data is loaded.
 
-US Postal ZIP Code  
-    Example: 02903  
+-------------------------------------------------------------------------------
 
-ICAO Airport Code  
-    Example: KPVD  
+Q: What is the fallback location setting for?
 
-IATA Airport Code  
-    Example: PVD  
+A: If a caller’s City/State is missing in their BBS user record, syncWx-NWS
+   will use a fallback latitude/longitude from your `modopts.ini`:
 
-Latitude, Longitude Coordinates  
-    Example 1: 41.8169872,-71.4561999  
-    Example 2: 37.776289,-122.395234  
-    Example 3: -31.9546855,115.8350291  
-    Note: There is no space in the above examples.  
+       [SyncWX]
+       latitude  = 35.3880338
+       longitude = -94.4265011
+       location_name = Fort Smith, AR
 
-State and City (for USA) or Country and City (for Non-USA) in a format that looks like one of these:  
-    RI/Providence  
-    CA/San_Francisco  
-    France/Paris  
+   This ensures the program always has valid coordinates to query NWS,
+   even if the user hasn’t set their location.
 
--------------------------------------------------------
+-------------------------------------------------------------------------------
 
-Q: I am having a problem, how do I get more info about the error?
+Q: Can I use IP address geolocation instead?
 
-A: In Synchronet, change your LogLevel to be Debugging. This should generate a Debug message in your Synchronet Control Panel and Logs that has the actual String sent to wunderground.com and the error the API kicked back (hopefully).
+A: The current syncWx-NWS script is designed to use **BBS user profile**
+   data (City, ST). It does not use IP geolocation. If you want IP-based
+   location, that would require a separate geolocation API and changes to
+   the script. For sysops who want accuracy, the best practice is to have
+   callers set their location in their user profile.
 
-Changing the LogLevel is done in /sbbs/ctrl/sbbs.ini  
-More info about it is listed here:  
-http://wiki.synchro.net/config:sbbs.ini#loglevel  
+-------------------------------------------------------------------------------
 
--------------------------------------------------------
+Q: How do I get more info about an error?
 
-Q: Users of the HTML5 version of ftelnet see the fallback information. Is there any way to show the caller info based on the IP they are connecting from?
+A: Increase Synchronet’s `LogLevel` to `Debugging` in `/sbbs/ctrl/sbbs.ini`.
+   This will show:
+     - The exact NWS API request URL
+     - Any HTTP errors returned
+     - The geocoding request/response
 
-A: Yes, there is. But, only if you run your own proxy service for ftelnet to connect through, and only if you are using [websocket-telnet-service.js](http://cvs.synchro.net/cgi-bin/viewcvs.cgi/exec/websocket-telnet-service.js?view=log) and [websocket-rlogin-service.js](http://cvs.synchro.net/cgi-bin/viewcvs.cgi/exec/websocket-rlogin-service.js?view=log). 
+   Synchronet LogLevel documentation:
+   http://wiki.synchro.net/config:sbbs.ini#loglevel
 
-websocket-telnet-service.js can be used on any of the web interfaces for Synchronet along with the code generated from [ftelnet](http://embed.ftelnet.ca/wizard/). 
+-------------------------------------------------------------------------------
 
-websocket-rlogin-service.js would only be useful if you are running [the new bootstrap based web interface from echicken](https://github.com/echicken/synchronet-web-v4).
+Q: Why do ftelnet or web callers see the fallback location instead of their own?
 
-In your /sbbs/ctrl/ directory, open up services.ini. You should have sections that look like this:
+A: The user location is determined from their BBS account, not their IP
+   address. Web callers who have not set their location will see the fallback
+   coordinates you’ve configured. To personalize the weather report for them,
+   have them log in at least once via telnet and set their City/State in
+   their user settings.
 
+-------------------------------------------------------------------------------
 
-    ; WebSocket Telnet Policy for embed.ftelnet.ca
-    [WebSocket]
-    Port=1123
-    MaxClients=24
-    Options=NO_HOST_LOOKUP
-    Command=websocket-telnet-service.js
-    
-    ; WebSocket RLogin Policy for Synchronet Web V4
-    [WebSocketRLogin]
-    Port=1513
-    Options=NO_HOST_LOOKUP
-    Command=websocket-rlogin-service.js
+Q: What’s the best format for the City/State field?
 
+A: Always use:
+        City, ST
+   Example:
+        Fort Smith, AR
+
+   This format produces the most reliable results when geocoded via
+   OpenStreetMap’s Nominatim service.
+
+-------------------------------------------------------------------------------

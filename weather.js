@@ -1,490 +1,322 @@
-//syncWXremix by KenDB3 - http://bbs.kd3.us
-//NWS provider migration by D2SK http://pwbass.com
-//Code for Error Handling by Kirkman - http://breakintochat.com & https://github.com/Kirkman
-//Code for detection of a Web Socket client's Real IP address by echicken - http://bbs.electronicchicken.com/ & https://github.com/echicken
-//Original syncWX by nolageek - http://www.capitolshrill.com/ & https://gist.github.com/nolageek/4168edf17fae3f834e30
-//Weather Icon designs done in Ctrl-A colored ASCII (Synchronet Formatting) by KenDB3
-//Weather Icons inspired by wego (Weather Client for Terminals), created by Markus Teich <teichm@in.tum.de> - https://github.com/schachmat/wego
-//See License file packaged with the icons for ISC License
+//
+// syncWx-NWS-Remix v2.1 (c) 2025 Patrick Bass <patrick@pwbass.com>
+//
+// RetroMafia BBS (retromafia.retrogoldbbs.com:8023)
+//       Respect the Legacy - Honor the Code
+//
+load("sbbsdefs.js");
+load("http.js");
 
-// ---------------------------
-// CONFIG & LIBS
-// ---------------------------
+// --- Defaults (overridden by ctrl/modopts.ini [SyncWX]) ---
+var DEFAULT_USER_AGENT = "RetroMafia BBS (hello@retrogoldbbs.com)";
+var DEFAULT_ICON_EXT   = ".asc";
 
-log(user.ip_address);
-
-// Load modopts.ini info early so we can detect if the section exists for [SyncWX]
-var opts = load({}, "modopts.js", "SyncWX");
-if (opts === null) {
-    log("ERROR in weather.js: opts is null.");
-    log("ERROR in weather.js: Are you sure you have a section in modopts.ini labeled [SyncWX]? See sysop.txt for instructions.");
-    exit();
+// --- Language (fallback to English) ---
+var WXlang, LocationHeader, ConditionsHeader, TempHeader, SunHeader, LunarHeader, WindHeader, AlertExpires, ReadAlert, degreeSymbol;
+try { load(js.exec_dir + "wxlanguage.js"); } catch(e) {
+  WXlang = "";
+  LocationHeader   = "Your Location: ";
+  ConditionsHeader = "Current Conditions: ";
+  TempHeader       = "Temp: ";
+  SunHeader        = "Sunrise/Sunset: ";
+  LunarHeader      = "Lunar Phase: ";
+  WindHeader       = "Wind: ";
+  AlertExpires     = "Expires ";
+  ReadAlert        = "Read the Full Alert";
+  degreeSymbol     = "\370"; // CP437 degree for Sync ANSI
 }
 
-// Expected new options (add to [SyncWX] in modopts.ini):
-// latitude=41.8781
-// longitude=-87.6298
-// user_agent=Retro Mafia BBS syncWXremix (sysop: patrick@example.com)
-// station=   (optional e.g. KORD)
-// provider=nws
-var LAT = parseFloat(opts.latitude);
-var LON = parseFloat(opts.longitude);
-var UA  = opts.user_agent || "Retro Mafia BBS syncWXremix (sysop: sysop@example.com)";
-var STATION_OVERRIDE = opts.station;
-var PROVIDER = (opts.provider || "nws").toLowerCase();
+// --- Modopts ---
+var opts = load({}, "modopts.js", "SyncWX") || {};
+var userAgent   = opts.user_agent || DEFAULT_USER_AGENT;
+var geo_email   = opts.email || "hello@retrogoldbbs.com";
+var iconExt     = opts.weathericon_ext || DEFAULT_ICON_EXT;
 
-load("http.js");       // HTTPRequest
-load("sbbsdefs.js");   // constants
-load(js.exec_dir + "websocket-helpers.js");
+// --- Helpers ---
+function safePause(){ try{ if (console && console.pause) console.pause(); }catch(_){ } }
+function header(){ try{ console.clear(); }catch(_){ } print("\r\nRetroMafia BBS - Local Weather Report\r\n\r\n\n"); }
+function showFail(title, reason, url){
+  header();
+  if (title)  print("ERROR: " + title + "\r\n");
+  if (reason) print("(" + reason + ")\r\n");
+  if (url)    print("URL:    " + url + "\r\n");
+  safePause();
+}
+function toFixed(n,p){ return Math.round(n*Math.pow(10,p))/Math.pow(10,p); }
+function hasANSI(){ try{ return console.term_supports && console.term_supports(USER_ANSI);}catch(_){ return false; } }
+function put(s){ try{ console.putmsg(s);}catch(_){ print(s);} }
 
-// Try to load new wxlanguage.js file, but default to English if it is missing
-try {
-    load(js.exec_dir + "wxlanguage.js");
-} catch (err) {
-    log("INFO in weather.js: wxlanguage.js not found; defaulting to English strings.");
-} finally {
-    WXlang = ""; // not used by NWS, kept for compatibility with existing strings
-    LocationHeader   = "Your Location: ";
-    ConditionsHeader = "Current Conditions: ";
-    TempHeader       = "Temp: ";
-    SunHeader        = "Sunrise/Sunset: ";  // NWS doesn’t provide astronomy; line kept but not used
-    LunarHeader      = "Lunar Phase: ";     // NWS doesn’t provide astronomy; line kept but not used
-    WindHeader       = "Wind: ";
-    UVHeader         = "UV Index: ";        // NWS doesn’t provide UV; line kept but not used
-    AlertExpires     = "Expires ";
-    ReadAlert        = "Read the Full Alert";
-    degreeSymbol     = "\370"; // ANSI/CP437 Degree Symbol
+// Wind: degrees -> compass text
+function degToCompass(deg){
+  if (deg==null || isNaN(deg)) return null;
+  var dirs=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  var idx=(Math.round(deg/22.5)%16+16)%16;
+  return dirs[idx];
 }
 
-var weathericon_ext = opts.weathericon_ext || ".ans"; // Now defined in /sbbs/ctrl/modopts.ini
-var fallback_type = opts.fallback_type;
-var fallback = opts.fallback;
-var dialup = (parseInt(user.connection) > 0); // detect dial-up
-
-// If a user connects through HTMLterm (proxy), try to infer real IP when needed.
-// (kept from original for compatibility; NWS path uses fixed lat/lon instead of GeoIP.)
-function getBackupSuffix() {
-    var bs;
-    var ip = resolve_ip(system.inet_addr);
-    if (dialup) {
-        bs = ip;
-    } else if (user.ip_address.search(
-        /(^127\.)|(^192\.168\.)|(^10\.)|(^172\.1[6-9]\.)|(^172\.2[0-9]\.)|(^172\.3[0-1]\.)|(^169\.254\.)|(^::1$)|(^[fF][cCdD])/
-    ) > -1 || user.ip_address === ip) {
-        if (client.protocol === "Telnet") {
-            bs = wstsGetIPAddress();
-        } else if (bbs.sys_status & SS_RLOGIN) {
-            bs = wsrsGetIPAddress();
-        }
-        if (typeof bs === "undefined") bs = ip;
-    } else {
-        bs = user.ip_address;
-    }
-    return bs;
+// HTTP request helpers
+function newReq(accept){
+  var r=new HTTPRequest();
+  r.max_redirects=3; r.timeout=30;
+  r.RequestHeaders=[
+    "User-Agent: " + userAgent,
+    "Accept: " + (accept||"application/geo+json"),
+    "Cache-Control: no-cache"
+  ];
+  return r;
 }
-var backupQuery = getBackupSuffix();
-
-// ---------------------------
-// NWS HELPERS
-// ---------------------------
-
-var NWS_BASE = "https://api.weather.gov";
-
-function httpJSON(url) {
-    var req = new HTTPRequest();
-    req.AddHeader("User-Agent", UA);
-    req.AddHeader("Accept", "application/geo+json");
-    var body = req.Get(url);
-    if (req.response_code < 200 || req.response_code >= 300) {
-        throw new Error("NWS " + req.response_code + " " + req.response_reason + " for " + url);
-    }
-    return JSON.parse(body);
+function getJSON(url, accept){
+  var req=newReq(accept||"application/geo+json");
+  var raw=req.Get(url);
+  var code=req.response_code;
+  if (!raw || code!==200){
+    var prob=null; try{ prob=JSON.parse(raw);}catch(e){}
+    return { __transport_error:"http "+code, __code:code, __url:url,
+             __problem: prob&&prob.title ? prob.title+(prob.detail?": "+prob.detail:"") : null };
+  }
+  if (/^\s*</.test(raw)) return { __transport_error:"non-json body", __code:code, __url:url };
+  try{ return JSON.parse(raw);}catch(e){ return { __transport_error:String(e), __code:code, __url:url }; }
 }
 
-function qvTo(valueObj, target) {
-    if (!valueObj || valueObj.value == null) return null;
-    var v = valueObj.value;
-    var u = (valueObj.unitCode || "").toLowerCase();
-    switch (target) {
-        case "F":
-            if (u.indexOf("degc") >= 0) return (v * 9/5) + 32;
-            if (u.indexOf("degf") >= 0) return v;
-            return v;
-        case "mph":
-            if (u.indexOf("m_s-1") >= 0) return v * 2.23693629;
-            if (u.indexOf("km_h-1") >= 0) return v * 0.621371;
-            if (u.indexOf("kn") >= 0) return v * 1.15078;
-            return v;
-        case "inHg":
-            if (u.indexOf("pa") >= 0)  return v / 3386.389;
-            if (u.indexOf("hpa") >= 0) return v / 33.86389;
-            return v;
-        case "mi":
-            if (u.indexOf("m") >= 0)   return v / 1609.344;
-            return v;
-        case "%":
-            return v;
-        default:
-            return v;
-    }
+// --- Geocode City, ST via Nominatim ---
+function geocodeCityState(loc){
+  if (!loc || typeof loc!=="string") return null;
+  var q=encodeURIComponent(loc);
+  var url="https://nominatim.openstreetmap.org/search?format=json&limit=1&q="+q;
+  var req=new HTTPRequest();
+  req.max_redirects=3; req.timeout=30;
+  req.RequestHeaders=[
+    "User-Agent: " + userAgent + " (" + geo_email + ")",
+    "Accept: application/json"
+  ];
+  var raw=req.Get(url);
+  if (!raw || req.response_code!==200) return { __err:"http "+req.response_code, __url:url };
+  try{
+    var arr=JSON.parse(raw);
+    if (!arr || !arr.length) return { __err:"no results", __url:url };
+    return { lat:parseFloat(arr[0].lat), lon:parseFloat(arr[0].lon), display:arr[0].display_name };
+  }catch(e){ return { __err:String(e), __url:url }; }
 }
 
-function degToCompass(deg) {
-    if (deg == null || isNaN(deg)) return "";
-    var dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
-    var idx = Math.round((deg % 360) / 22.5) % 16;
-    return dirs[idx];
+// --- /points (strict Accept) with retry on rounded coords ---
+function fetchPoints(lat,lon){
+  function u(a,b){ return "https://api.weather.gov/points/"+a+","+b; }
+  var u1=u(lat,lon), j1=getJSON(u1,"application/geo+json");
+  if (!j1.__transport_error && j1.properties) return {ok:true,json:j1,url:u1};
+  var u2=u(toFixed(lat,4), toFixed(lon,4)), j2=getJSON(u2,"application/geo+json");
+  if (!j2.__transport_error && j2.properties) return {ok:true,json:j2,url:u2};
+  var f=j1.__transport_error ? {url:u1,err:(j1.__problem||j1.__transport_error),code:j1.__code}
+        : j2.__transport_error ? {url:u2,err:(j2.__problem||j2.__transport_error),code:j2.__code}
+        : {url:u1,err:"unknown"};
+  return {ok:false,failure:f};
 }
 
-function mapShortForecastToIcon(shortText) {
-    if (!shortText) return "unknown";
-    var s = shortText.toLowerCase();
-    if (s.indexOf("thunder") >= 0) return "tsra";
-    if (s.indexOf("snow") >= 0) return "snow";
-    if (s.indexOf("sleet") >= 0 || s.indexOf("wintry") >= 0) return "sleet";
-    if (s.indexOf("freezing") >= 0) return "fzra";
-    if (s.indexOf("rain") >= 0 || s.indexOf("showers") >= 0 || s.indexOf("drizzle") >= 0) return "rain";
-    if (s.indexOf("hail") >= 0) return "hail";
-    if (s.indexOf("fog") >= 0 || s.indexOf("mist") >= 0) return "fog";
-    if (s.indexOf("haze") >= 0 || s.indexOf("smoke") >= 0) return "haze";
-    if (s.indexOf("wind") >= 0) return "wind";
-    if (s.indexOf("cloudy") >= 0) return "ovc";
-    if (s.indexOf("partly") >= 0) return "sct";
-    if (s.indexOf("mostly") >= 0) return "bkn";
-    if (s.indexOf("sunny") >= 0 || s.indexOf("clear") >= 0) return "skc";
-    return "ovc";
+// --- Simple astronomy (local) ---
+function rad(d){return d*Math.PI/180;}
+function julian(y,m,d){ if(m<=2){y--;m+=12;} var A=Math.floor(y/100),B=2-A+Math.floor(A/4);
+  return Math.floor(365.25*(y+4716))+Math.floor(30.6001*(m+1))+d+B-1524.5; }
+function sunTimes(lat,lon,date){
+  try{
+    function fromJulian(J){ return new Date((J-2440587.5)*86400000); }
+    function pad(n){return (n<10?"0":"")+n;}
+    function hhmm(dt){ return pad(dt.getHours())+":"+pad(dt.getMinutes()); }
+
+    var y=date.getUTCFullYear(), m=date.getUTCMonth()+1, d=date.getUTCDate();
+    var J=julian(y,m,d), n=(J-2451545.0)-lon/360;
+    var M=(357.5291+0.98560028*n)%360;
+    var C=1.9148*Math.sin(rad(M))+0.02*Math.sin(rad(2*M))+0.0003*Math.sin(rad(3*M));
+    var L=(M+102.9372+C+180)%360;
+    var Jt=2451545.5+n+0.0053*Math.sin(rad(M))-0.0069*Math.sin(rad(2*L));
+    var dec=Math.asin(Math.sin(rad(L))*Math.sin(rad(23.44)));
+    var latr=rad(lat);
+    var H0=Math.acos((Math.sin(rad(-0.83))-Math.sin(latr)*Math.sin(dec))/(Math.cos(latr)*Math.cos(dec)));
+    var Jr=Jt-H0/(2*Math.PI), Js=Jt+H0/(2*Math.PI);
+    var off=(new Date().getTimezoneOffset()*-60000);
+    var rise=new Date(fromJulian(Jr).getTime()+off), set=new Date(fromJulian(Js).getTime()+off);
+    var syn=29.530588861, ref=Date.UTC(2000,0,6,18,14,0), age=((date.getTime()-ref)/86400000)%syn; if(age<0) age+=syn;
+    var phase="New Moon";
+    if (age<1.84566) phase="New Moon";
+    else if (age<5.53699) phase="Waxing Crescent";
+    else if (age<9.22831) phase="First Quarter";
+    else if (age<12.91963) phase="Waxing Gibbous";
+    else if (age<16.61096) phase="Full Moon";
+    else if (age<20.30228) phase="Waning Gibbous";
+    else if (age<23.99361) phase="Last Quarter";
+    else if (age<27.68493) phase="Waning Crescent";
+    return {sr:hhmm(rise), ss:hhmm(set), phase:phase};
+  }catch(e){ return {sr:"--:--", ss:"--:--", phase:"N/A"}; }
 }
 
-// Make some CP437/ANSI arrows for wind direction (same as original)
-var windArrowDirN   = "\001h\001y\031";
-var windArrowDirNNE = "\001h\001y\031\031\021";
-var windArrowDirNE  = "\001h\001y\031\021";
-var windArrowDirENE = "\001h\001y\021\031\021";
-var windArrowDirE   = "\001h\001y\021";
-var windArrowDirESE = "\001h\001y\021\030\021";
-var windArrowDirSE  = "\001h\001y\030\021";
-var windArrowDirSSE = "\001h\001y\030\030\021";
-var windArrowDirS   = "\001h\001y\030";
-var windArrowDirSSW = "\001h\001y\030\030\020";
-var windArrowDirSW  = "\001h\001y\030\020";
-var windArrowDirWSW = "\001h\001y\020\030\020";
-var windArrowDirW   = "\001h\001y\020";
-var windArrowDirWNW = "\001h\001y\020\031\020";
-var windArrowDirNW  = "\001h\001y\031\020";
-var windArrowDirNNW = "\001h\001y\031\031\020";
+// --- Icon printing ---
+// Print NWS-based icon at (x,y) if possible; fallback to unknown.
+function printIconFromNWSIconURL(iconURL, x, y){
+  if (!iconURL || !hasANSI()) return false;
+  try {
+    var path = iconURL.replace(/^https?:\/\/[^/]+\/icons\//, ""); // e.g., "land/day/few?size=medium"
+    var parts = path.split("/");
+    var tod = (parts.indexOf("day")>=0) ? "day" : (parts.indexOf("night")>=0 ? "night" : "");
+    var tokenRaw = path.split(tod + "/")[1] || "";
+    tokenRaw = tokenRaw.split("/")[0] || "";
+    tokenRaw = tokenRaw.split("?")[0] || "";
+    var token = tokenRaw.split(",")[0];
 
-function windArrowFromCompass(dir) {
-    switch (dir) {
-        case "N":   return " " + windArrowDirN;
-        case "NNE": return " " + windArrowDirNNE;
-        case "NE":  return " " + windArrowDirNE;
-        case "ENE": return " " + windArrowDirENE;
-        case "E":   return " " + windArrowDirE;
-        case "ESE": return " " + windArrowDirESE;
-        case "SE":  return " " + windArrowDirSE;
-        case "SSE": return " " + windArrowDirSSE;
-        case "S":   return " " + windArrowDirS;
-        case "SSW": return " " + windArrowDirSSW;
-        case "SW":  return " " + windArrowDirSW;
-        case "WSW": return " " + windArrowDirWSW;
-        case "W":   return " " + windArrowDirW;
-        case "WNW": return " " + windArrowDirWNW;
-        case "NW":  return " " + windArrowDirNW;
-        case "NNW": return " " + windArrowDirNNW;
-        default:    return "";
-    }
-}
-
-// ---------------------------
-// NWS FETCH & NORMALIZE
-// ---------------------------
-
-function getNWSData(lat, lon, stationOverride) {
-    // 1) Resolve point → links
-    var pt = httpJSON(NWS_BASE + "/points/" + lat + "," + lon);
-    var props = pt.properties || {};
-
-    var forecastURL = props.forecast;            // 12h periods (text)
-    var stationsURL = props.observationStations; // list for area
-    var zoneId   = (props.forecastZone || "").split("/").pop();
-    var countyId = (props.county || "").split("/").pop();
-    var relLoc   = (props.relativeLocation && props.relativeLocation.properties)
-                    ? (props.relativeLocation.properties.city + ", " + props.relativeLocation.properties.state)
-                    : ("Lat " + lat + ", Lon " + lon);
-
-    // 2) Forecast periods
-    var f = httpJSON(forecastURL + "?units=us");
-    var periods = (f.properties && f.properties.periods) ? f.properties.periods : [];
-
-    // 3) Observation station (pick nearest if not provided)
-    var stationId = stationOverride;
-    if (!stationId) {
-        var st = httpJSON(stationsURL);
-        if (st && st.observationStations && st.observationStations.length) {
-            stationId = st.observationStations[0].split("/").pop();
-        }
-    }
-
-    // 4) Latest observation
-    var obs = null;
-    if (stationId) {
-        var latest = httpJSON(NWS_BASE + "/stations/" + stationId + "/observations/latest?require_qc=true");
-        var P = latest.properties || {};
-        obs = {
-            when:   P.timestamp,
-            text:   P.textDescription || "",
-            tempF:  (P.temperature && P.temperature.value != null) ? Math.round(qvTo(P.temperature, "F")) : null,
-            dewF:   (P.dewpoint   && P.dewpoint.value   != null) ? Math.round(qvTo(P.dewpoint,   "F")) : null,
-            rh:     (P.relativeHumidity && P.relativeHumidity.value != null) ? Math.round(qvTo(P.relativeHumidity, "%")) : null,
-            windDirDeg: (P.windDirection && P.windDirection.value != null) ? Math.round(P.windDirection.value) : null,
-            windMph: (P.windSpeed && P.windSpeed.value != null) ? Math.round(qvTo(P.windSpeed, "mph")) : null,
-            gustMph: (P.windGust && P.windGust.value != null) ? Math.round(qvTo(P.windGust, "mph")) : null,
-            visMi:  (P.visibility && P.visibility.value != null) ? (qvTo(P.visibility, "mi")).toFixed(1) : null,
-            pressureIn: (P.barometricPressure && P.barometricPressure.value != null) ? (qvTo(P.barometricPressure, "inHg")).toFixed(2) : null
-        };
-    }
-
-    // 5) Alerts by point
-    var alertsRaw = httpJSON(NWS_BASE + "/alerts/active?point=" + lat + "," + lon);
-    var alerts = [];
-    if (alertsRaw && alertsRaw.features && alertsRaw.features.length) {
-        for (var i = 0; i < alertsRaw.features.length; i++) {
-            var a = alertsRaw.features[i].properties || {};
-            alerts.push({
-                id: a.id,
-                headline: a.headline || a.event,
-                event: a.event,
-                effective: a.effective,
-                expires: a.expires,
-                severity: a.severity,
-                urgency: a.urgency,
-                area: a.areaDesc,
-                instruction: a.instruction || ""
-            });
-        }
-    }
-
-    return {
-        location: relLoc,
-        zoneId: zoneId,
-        countyId: countyId,
-        stationId: stationId,
-        periods: periods,
-        current: obs,
-        alerts: alerts
+    var map = {
+      skc:"clear", few:"mostlysunny", sct:"partlycloudy", bkn:"mostlycloudy", ovc:"cloudy",
+      rain:"rain", tsra:"tstorms", snow:"snow", sleet:"sleet", fog:"fog", wind_skc:"wind",
+      haze:"hazy", hot:"hot", cold:"cold", dust:"dust", smoke:"smoke", fzra:"fzra"
     };
+    var candidates=[];
+    if (token){ candidates.push(token); if (tod) candidates.push(tod+"_"+token); if (map[token]){candidates.push(map[token]); if (tod) candidates.push(tod+"_"+map[token]);}}
+    if (tod && !token) candidates.push(tod+"_clear");
+
+    function tryPrint(name){
+      var f=js.exec_dir+"icons/"+name+iconExt;
+      if (file_exists(f)){ console.gotoxy(x,y); console.printfile(f); return true; }
+      return false;
+    }
+    for (var i=0;i<candidates.length;i++){ if (tryPrint(candidates[i])) return true; }
+    if (tryPrint("unknown")) return true;
+  } catch(e) { }
+  return false;
 }
 
-// ---------------------------
-// RENDERING (keeps your layout)
-// ---------------------------
+// --- Main ---
+(function main(){
+  try{
+    // Current user and location string (e.g., "City, ST")
+    var curUserNum = (bbs && bbs.node_num) ? system.node_list[bbs.node_num-1].useron
+                     : (user && user.number ? user.number : 1);
+    var u = new User(curUserNum);
+    var loc = u && u.location ? u.location : "";
 
-function firstIconKeyFromPeriods(periods) {
-    if (!periods || !periods.length) return "unknown";
-    // Prefer the first *current/near-term* period (index 0)
-    var p = periods[0];
-    return mapShortForecastToIcon(p.shortForecast || p.detailedForecast || "");
-}
+    header();
 
-function safeLen(s) { return (s && s.length) ? s.length : 0; }
+    // Coordinates (from modopts or geocode)
+    var lat=null, lon=null, locLabel="Unknown";
+    if (opts.latitude && opts.longitude){
+      lat=parseFloat(opts.latitude); lon=parseFloat(opts.longitude);
+      locLabel = opts.location_name || "Configured Location";
+    } else if (loc && loc.trim()!==""){
+      var g = geocodeCityState(loc);
+      if (g && !g.__err){ lat=g.lat; lon=g.lon; var parts=String(loc).split(","); locLabel=(parts.length>=2)?(parts[0].trim()+", "+parts[1].trim()):loc; }
+      else { showFail("/geocode failed.", g?g.__err:"unknown", g?g.__url:""); return; }
+    } else { showFail("No user location", "User.location empty. Set City/State or configure latitude/longitude in modopts.ini."); return; }
 
-function drawANSI(nws) {
-    // Colors (same palette as original)
-    var gy    = "\1n\001w"; // normal white (gray)
-    var wh    = "\001w\1h"; // bright white
-    var drkyl = "\001n\001y";
-    var yl    = "\001y\1h";
-    var drkbl = "\001n\001b";
-    var bl    = "\001b\1h";
-    var drkrd = "\001n\001r";
-    var rd    = "\001r\1h";
-    var drkcy = "\001n\001c";
-    var cy    = "\001c\1h";
+    // /points
+    var points = fetchPoints(lat,lon);
+    if (!points.ok){ showFail("/points request failed.", points.failure.err, points.failure.url); return; }
+    var props = points.json.properties;
+    var forecastURL       = props.forecast;
+    var forecastHourlyURL = props.forecastHourly;
+    var obsStationsURL    = props.observationStations;
 
-    console.clear();
+    // forecasts
+    var fc = getJSON(forecastURL, "application/geo+json");
+    var fh = getJSON(forecastHourlyURL, "application/geo+json");
 
-    // ICON
-    var iconKey = firstIconKeyFromPeriods(nws.periods);
-    if (!file_exists(js.exec_dir + "icons/" + iconKey + weathericon_ext)) {
-        iconKey = "unknown";
+    // station & latest observation
+    var st = getJSON(obsStationsURL, "application/geo+json");
+    var latest = null;
+    if (!st.__transport_error && st.features && st.features.length){
+      var sid = st.features[0].properties.stationIdentifier || null;
+      if (sid){
+        latest = getJSON("https://api.weather.gov/stations/"+sid+"/observations/latest", "application/geo+json");
+      }
     }
 
-    // Prefer file with configured extension; fallback to .asc for non-ANSI later
-    console.printfile(js.exec_dir + "icons/" + iconKey + weathericon_ext);
+    // Astronomy
+    var astro = sunTimes(lat, lon, new Date());
 
-    // TEXT BLOCK (right side)
-    console.gotoxy(20,2);
-    console.putmsg(wh + LocationHeader + yl + nws.location);
+    // Layout positions (ANSI)
+    var rightX = 22; // text starts to the right of icon
+    var topY   = 3;  // first line row
 
-    var currentText = (nws.current && nws.current.text) ? nws.current.text : (nws.periods[0] ? (nws.periods[0].shortForecast || "") : "");
-    console.gotoxy(20,3);
-    console.putmsg(wh + ConditionsHeader + yl + currentText);
-
-    // Temperature: from obs (preferred) or period 0 temp if available
-    var tempF = (nws.current && nws.current.tempF != null)
-        ? nws.current.tempF
-        : (nws.periods[0] && typeof nws.periods[0].temperature === "number" ? nws.periods[0].temperature : null);
-
-    console.gotoxy(20,4);
-    if (tempF != null) {
-        console.putmsg(wh + TempHeader + yl + tempF + " " + degreeSymbol + "F");
-    } else {
-        console.putmsg(wh + TempHeader + yl + "N/A");
+    // Icon at left (ANSI only)
+    if (hasANSI() && !fc.__transport_error && fc.properties && fc.properties.periods && fc.properties.periods.length) {
+      try { var iconURL = fc.properties.periods[0].icon || null; printIconFromNWSIconURL(iconURL, 2, topY); } catch(e){}
+    } else if (hasANSI()) {
+      var fb = js.exec_dir + "icons/unknown" + iconExt;
+      if (file_exists(fb)) { console.gotoxy(2, topY); console.printfile(fb); }
     }
 
-    // Wind
-    var wdir = (nws.current && nws.current.windDirDeg != null) ? degToCompass(nws.current.windDirDeg) : "";
-    var wspd = (nws.current && nws.current.windMph != null) ? nws.current.windMph + " mph" : "calm";
-    console.gotoxy(20,5);
-    console.putmsg(wh + WindHeader + yl + (wdir ? (wdir + " ") : "") + wspd + windArrowFromCompass(wdir));
+    // Gather values
+    var cond="N/A", tempF=null, tempC=null, windTxt="N/A";
+    if (latest && !latest.__transport_error){
+      try{
+        cond = latest.properties.textDescription || "N/A";
+        var t = latest.properties.temperature;
+        if (t && typeof t.value==="number") { tempC = Math.round(t.value); tempF = Math.round((t.value*9/5)+32); }
+        var wdir=latest.properties.windDirection, wspd=latest.properties.windSpeed;
+        var dirdeg = (wdir && typeof wdir.value==="number") ? Math.round(wdir.value) : null;
+        var dirTxt = degToCompass(dirdeg);
+        var spdmps = (wspd && typeof wspd.value==="number") ? wspd.value : null;
+        var spdmph = (spdmps!==null) ? Math.round(spdmps*2.23694) : null;
+        windTxt = (dirTxt && spdmph!=null) ? (dirTxt + " @ " + spdmph + " mph") : "N/A";
+      }catch(e){}
+    }
 
-    // UV & Astronomy not available from NWS → omit lines 6-8 in ANSI (keep spacing clean)
-    // You can add your own sunrise/sunset calc later if desired.
+    // Colors
+    var gy="\1n\1w", wh="\1h\1w", yl="\1h\1y";
 
-    // Forecast summary rows (use first 4 periods to mimic original footprint)
-    var max = Math.min(4, nws.periods.length);
-    for (var i = 0; i < max; i++) {
-        var p = nws.periods[i];
-        var x = 4 + i*19;
-        console.gotoxy(x,11);
-        console.putmsg(wh + (p.name || (p.isDaytime ? "Day" : "Night")));
-        console.gotoxy(x,12);
+    // ANSI aligned output
+    if (hasANSI()) {
+      function line(y, label, value){ console.gotoxy(rightX, y); put(wh + label + yl + value); }
+      line(topY,   LocationHeader,   locLabel);
+      line(topY+1, ConditionsHeader, cond);
+      if (tempF!==null && tempC!==null) line(topY+2, TempHeader, tempF + degreeSymbol + " F (" + tempC + degreeSymbol + " C)");
+      else                               line(topY+2, TempHeader, "N/A");
+      line(topY+3, SunHeader, astro.sr + gy + " / " + yl + astro.ss);
+      line(topY+4, LunarHeader, astro.phase);
+      line(topY+5, WindHeader,  windTxt);
 
-        var cond = p.shortForecast || (p.detailedForecast || "");
-        var condLen = safeLen(cond);
-        if (condLen > 18) cond = cond.slice(0,18);
-        console.putmsg(yl + cond);
-
-        // Build a Low/High line if we have a day/night pair; otherwise print temp for period
-        console.gotoxy(x,13);
-        var line13 = "";
-        var line14 = "";
-
-        if (p.temperature != null) {
-            // For a single period, just show the one temp
-            line13 = bl + "Temp ";
-            line14 = bl + p.temperature + gy + " " + degreeSymbol + "F";
-            // Try to show PoP if present
-            if (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value != null) {
-                line13 += wh + "  PoP " + rd + Math.round(p.probabilityOfPrecipitation.value) + "%";
-            }
-        } else {
-            line13 = gy + "";
-            line14 = gy + "";
+      // Forecast (first 3 periods to fit nicely)
+      var y = topY + 7;
+      if (!fc.__transport_error && fc.properties && fc.properties.periods && fc.properties.periods.length){
+        var maxShow=Math.min(3, fc.properties.periods.length);
+        for (var i=0;i<maxShow;i++){
+          var p=fc.properties.periods[i];
+          var name=p.name || ("Period "+p.number);
+          var short=p.shortForecast || "";
+          console.gotoxy(2, y+(i*3));
+          put(yl + name + gy + ": " + wh + short + "\r\n");
+          console.gotoxy(2, y+(i*3)+1);
+          if (p.temperature) {
+            var hiLo = p.isDaytime ? "Hi " : "Lo ";
+            put(wh + hiLo + p.temperature + " " + (p.temperatureUnit||"") + "\r\n");
+          }
         }
-        console.putmsg(line13);
-        console.gotoxy(x,14);
-        console.putmsg(line14);
-    }
-
-    // Alerts (show first if any)
-    if (nws.alerts && nws.alerts.length) {
-        var a0 = nws.alerts[0];
-        console.gotoxy(20,16);
-        console.putmsg("\007"); // bell
-        console.gotoxy(20,17);
-        console.putmsg(drkrd + (a0.headline || a0.event));
-        console.gotoxy(20,18);
-        console.putmsg(rd + (a0.effective || ""));
-        console.gotoxy(20,19);
-        console.putmsg(rd + AlertExpires + (a0.expires || ""));
-        console.gotoxy(20,20);
-        if (console.noyes(ReadAlert) === false) {
-            console.putmsg(rd + (a0.instruction || ""));
-        }
-    }
-
-    console.crlf();
-    console.putmsg(gy + " syncWXremix." + drkcy + "KenDB3     " + gy + "icons." + drkcy + "KenDB3      " + gy + "data." + drkbl + "api.weather.gov");
-    console.crlf();
-}
-
-function drawTTY(nws) {
-    // Non-ANSI: text-only; print icon as .asc if available else unknown.asc
-    var iconKey = firstIconKeyFromPeriods(nws.periods);
-    if (!file_exists(js.exec_dir + "icons/" + iconKey + ".asc")) {
-        iconKey = "unknown";
-    }
-    console.printfile(js.exec_dir + "icons/" + iconKey + ".asc");
-
-    write("\r\n                   " + LocationHeader + (nws.location || "") + "\r\n");
-    var currentText = (nws.current && nws.current.text) ? nws.current.text : (nws.periods[0] ? (nws.periods[0].shortForecast || "") : "");
-    write("                   " + ConditionsHeader + currentText + "\r\n");
-
-    var tempF = (nws.current && nws.current.tempF != null)
-        ? nws.current.tempF
-        : (nws.periods[0] && typeof nws.periods[0].temperature === "number" ? nws.periods[0].temperature : null);
-    write("                   " + TempHeader + (tempF != null ? (tempF + " F") : "N/A") + "\r\n");
-
-    var wdir = (nws.current && nws.current.windDirDeg != null) ? degToCompass(nws.current.windDirDeg) : "";
-    var wspd = (nws.current && nws.current.windMph != null) ? (nws.current.windMph + " mph") : "calm";
-    write("                   " + WindHeader + (wdir ? (wdir + " ") : "") + wspd + "\r\n\r\n");
-
-    var max = Math.min(4, nws.periods.length);
-    for (var i = 0; i < max; i++) {
-        var p = nws.periods[i];
-        var cond = p.shortForecast || (p.detailedForecast || "");
-        if (safeLen(cond) > 26) cond = cond.slice(0,26);
-        write("         " + (p.name || (p.isDaytime ? "Day" : "Night")) + ": " + cond + " | ");
-        if (p.temperature != null) {
-            write("Temp " + p.temperature + " F\r\n");
-        } else {
-            write("Temp N/A\r\n");
-        }
-    }
-    console.crlf();
-
-    if (nws.alerts && nws.alerts.length) {
-        var a0 = nws.alerts[0];
-        console.beep();
-        write("                   " + (a0.headline || a0.event) + "\r\n");
-        if (a0.effective) write("                   " + a0.effective + "\r\n");
-        if (a0.expires)   write("                   " + AlertExpires + a0.expires + "\r\n");
-        write("               ");
-        if (console.noyes(ReadAlert) === false)
-            console.putmsg((a0.instruction || "") + "\r\n");
-        console.crlf();
+      }
+      console.gotoxy(2, y + 3 + 3); // push cursor down a bit
+      put("\r\n" + gy + "syncWC-NWS-Remix (data: weather.gov)\r\n");
+      safePause();
     } else {
-        console.crlf(); console.crlf(); console.crlf();
+      // Non-ANSI fallback
+      put(LocationHeader + locLabel + "\r\n");
+      put(ConditionsHeader + cond + "\r\n");
+      if (tempF!==null && tempC!==null) put(TempHeader + tempF + " F (" + tempC + " C)\r\n");
+      else put(TempHeader + "N/A\r\n");
+      put(SunHeader + astro.sr + " / " + astro.ss + "\r\n");
+      put(LunarHeader + astro.phase + "\r\n");
+      put(WindHeader + windTxt + "\r\n\r\n");
+      if (!fc.__transport_error && fc.properties && fc.properties.periods && fc.properties.periods.length){
+        var maxShow=Math.min(3, fc.properties.periods.length);
+        for (var i=0;i<maxShow;i++){
+          var p=fc.properties.periods[i];
+          var name=p.name || ("Period "+p.number);
+          var short=p.shortForecast || "";
+          put(name + ": " + short + "\r\n");
+          if (p.temperature) {
+            var hiLo = p.isDaytime ? "Hi " : "Lo ";
+            put(hiLo + p.temperature + " " + (p.temperatureUnit||"") + "\r\n\r\n");
+          }
+        }
+      }
+      put("RetroMafia BBS (retromafia.retrogoldbbs.com:8023) | syncWx-NWS-Remix v2.1 | Data source: weather.gov\r\n");
+      safePause();
     }
 
-    write(" syncWXremix.KenDB3     icons.KenDB3      data.api.weather.gov\r\n");
-}
-
-// ---------------------------
-// MAIN
-// ---------------------------
-
-function forecastNWS() {
-    // Validate coordinates
-    if (isNaN(LAT) || isNaN(LON)) {
-        log("ERROR in weather.js: latitude/longitude missing or invalid in [SyncWX] modopts.ini.");
-        exit();
-    }
-
-    var nws = getNWSData(LAT, LON, STATION_OVERRIDE);
-
-    if (console.term_supports(USER_ANSI)) {
-        drawANSI(nws);
-    } else {
-        drawTTY(nws);
-    }
-}
-
-try {
-    if (PROVIDER !== "nws") {
-        log("INFO in weather.js: provider in modopts.ini is not 'nws'. Using NWS anyway (WU path removed).");
-    }
-    forecastNWS();
-    console.pause();
-    console.clear();
-    console.aborted = false;
-
-} catch (err) {
-    log("ERROR in weather.js. " + err);
-    log(LOG_DEBUG,"DEBUG in weather.js. NWS endpoints used with lat=" + LAT + " lon=" + LON + " station=" + (STATION_OVERRIDE || "auto"));
-} finally {
-    exit();
-}
-
-exit();
+  }catch(err){
+    log("ERROR weather.js outer: " + err);
+    showFail("Unexpected error", String(err), "");
+  }
+})();
