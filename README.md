@@ -78,7 +78,7 @@ TTY (Mono) ASCII mode with alert:
 
 ---
 ## Logon Event (add to logon.js)
-
+```
 /* ===== Run weather at logon (robust path; run as its own JS process) ===== */
 (function(){
     try{
@@ -124,7 +124,7 @@ TTY (Mono) ASCII mode with alert:
         dbg("hook error: " + e);
     }
 })();
-
+```
 ---
 ## FAQ
 
