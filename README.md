@@ -77,7 +77,55 @@ TTY (Mono) ASCII mode with alert:
    Users can run it from the external programs menu or it can be called from `logon.js`.
 
 ---
+## Logon Event (add to logon.js)
 
+/* ===== Run weather at logon (robust path; run as its own JS process) ===== */
+(function(){
+    try{
+        if(!options.run_syncwx){ dbg("disabled via modopts"); return; }
+        if(options.syncwx_min_level && user.security.level < options.syncwx_min_level){ dbg("below min level"); return; }
+        if(options.syncwx_skip_guests && (user.security.restrictions & UFLAG_G)){ dbg("skipping guest"); return; }
+        if(options.syncwx_skip_rlogin && (bbs.sys_status & SS_RLOGIN)){ dbg("skipping rlogin"); return; }
+        if(options.syncwx_hours && !withinHourWindow(options.syncwx_hours)){ dbg("outside hour window "+options.syncwx_hours); return; }
+
+        var cand = [];
+        var cfg = String(options.syncwx_path||"");
+        if(cfg) cand.push(cfg);
+        cand.push("../xtrn/syncWx-NWS/weather.js");
+        cand.push("xtrn/syncWx-NWS/weather.js");
+        cand.push("C:/sbbs/xtrn/syncWx-NWS/weather.js");
+        cand.push("C:\\sbbs\\xtrn\\syncWx-NWS\\weather.js");
+
+        var launched=false;
+        for(var i=0;i<cand.length && !launched;i++){
+            var requested = cand[i];
+            var ap = joinRoot(requested);   // C:/sbbs/xtrn/syncWx-NWS/weather.js
+            if(exists(ap)){
+                // Launch as a separate JS process so js.exec_dir === module dir.
+                // Use forward slashes to keep Synchronet happy on Windows.
+                var cmd = "?" + norm(ap);
+                dbg("exec " + cmd);
+                bbs.exec(cmd);
+                launched = true;
+                break;
+            }
+            // If candidate is already absolute and exists, use it
+            var rp = norm(requested);
+            if(/^([A-Za-z]:\/|\/)/.test(rp) && exists(requested)){
+                var cmd2 = "?" + rp;
+                bbs.exec(cmd2);
+                launched = true;
+                break;
+            }
+        }
+        if(!launched) dbg("NOT FOUND — verify weather.js is at C:\\sbbs\\xtrn\\syncWx-NWS\\weather.js");
+        if(options.syncwx_debug) console.crlf();
+    }catch(e){
+        dbg("hook error: " + e);
+    }
+})();
+
+---
 ## FAQ
 
 **Q:** Why does it sometimes show the wrong location when used as a logon event?  

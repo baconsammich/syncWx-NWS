@@ -19,6 +19,7 @@ TempHeader       = "Temp: ";
 SunHeader        = "Sunrise/Sunset: ";
 LunarHeader      = "Lunar Phase: ";
 WindHeader       = "Wind: ";
+AlertsHeader     = "Alerts: ";           // <-- Added this line
 UVHeader         = "UV Index: ";
 AlertExpires     = "Expires ";
 ReadAlert        = "Read the Full Alert";
@@ -31,6 +32,7 @@ if (language === "sp") {                 // Español
   SunHeader        = "Amanecer/Puesta del sol: ";
   LunarHeader      = "Fase lunar: ";
   WindHeader       = "Viento: ";
+  AlertsHeader     = "Alertas: ";        // <-- Added
   UVHeader         = "Índice UV: ";
   AlertExpires     = "Expira ";
   ReadAlert        = "Leer la alerta";
@@ -42,6 +44,7 @@ if (language === "sp") {                 // Español
   SunHeader        = "Alba/Tramonto: ";
   LunarHeader      = "Fase lunare: ";
   WindHeader       = "Vento: ";
+  AlertsHeader     = "Avvisi: ";         // <-- Added
   UVHeader         = "Indice UV: ";
   AlertExpires     = "Scade ";
   ReadAlert        = "Leggi l'avviso";
@@ -53,6 +56,7 @@ if (language === "sp") {                 // Español
   SunHeader        = "Lever/Coucher du soleil : ";
   LunarHeader      = "Phase lunaire : ";
   WindHeader       = "Vent : ";
+  AlertsHeader     = "Alertes : ";       // <-- Added
   UVHeader         = "Indice UV : ";
   AlertExpires     = "Expire ";
   ReadAlert        = "Lire l'alerte complète";
@@ -64,6 +68,7 @@ if (language === "sp") {                 // Español
   SunHeader        = "Sonnenaufgang/Sonnenuntergang: ";
   LunarHeader      = "Mondphase: ";
   WindHeader       = "Wind: ";
+  AlertsHeader     = "Warnungen: ";      // <-- Added
   UVHeader         = "UV-Index: ";
   AlertExpires     = "Läuft ab ";
   ReadAlert        = "Vollständige Warnung lesen";
@@ -76,4 +81,21 @@ if (language === "en") {
   degreeSymbol = "\370";       // CP437 degree (ANSI/PC)
 } else {
   degreeSymbol = "\u00B0";     // Unicode degree
+}
+
+// Add RetroMafia themed overrides if this is RetroMafia BBS
+if (typeof system !== 'undefined' && system.name) {
+  if (system.name.toLowerCase().indexOf("retromafia") >= 0 || 
+      system.name.toLowerCase().indexOf("retro mafia") >= 0) {
+    // Override with mafia-themed headers for English
+    if (language === "en") {
+      LocationHeader   = "Your Turf: ";
+      ConditionsHeader = "Word on the Street: ";
+      TempHeader       = "Heat Level: ";
+      WindHeader       = "Wind from the Docks: ";
+      AlertsHeader     = "⚠ Family Advisory: ";
+      AlertExpires     = "Deal Expires ";
+      ReadAlert        = "Get the Full Story";
+    }
+  }
 }

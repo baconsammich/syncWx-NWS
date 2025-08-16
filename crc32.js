@@ -1,57 +1,61 @@
-// crc32.js — tiny CRC-32 (IEEE 802.3) for Synchronet JS
-// Public Domain / CC0. Drop this next to weather.js and `load("crc32.js")`.
-// Exposes: crc32_calc(str) -> unsigned 32-bit integer
-//          crc32_hex(str)  -> 8-char uppercase hex string
+// crc32.js
+// Tiny CRC-32 (IEEE 802.3, polynomial 0xEDB88320) for Synchronet JS
+// Exposes: crc32_calc(input) -> unsigned 32-bit integer
+// Accepts a JavaScript string (processed as bytes, charCode & 0xFF) or an array of byte values.
 
-/*
-Usage test (from JSexec or inside your script):
-  load("crc32.js");
-  print(format("%08lx\r\n", crc32_calc("test"))); // D87F7E0C
-  print(crc32_hex("test") + "\r\n");              // D87F7E0C
-*/
-
-(function(){
-  if (typeof crc32_calc === 'function') return; // already loaded
-
-  var POLY = 0xEDB88320; // reversed 0x04C11DB7
-  var TABLE = (function(){
-    var t = [];
-    for (var n = 0; n < 256; n++) {
-      var c = n;
-      for (var k = 0; k < 8; k++)
-        c = (c & 1) ? (POLY ^ (c >>> 1)) : (c >>> 1);
-      t[n] = c >>> 0;
+// Build CRC table once (no ES6, no trailing commas)
+var CRC32_TABLE = (function () {
+    var table = new Array(256);
+    var i, j, c;
+    for (i = 0; i < 256; i++) {
+        c = i;
+        for (j = 0; j < 8; j++) {
+            if ((c & 1) !== 0)
+                c = (c >>> 1) ^ 0xEDB88320;
+            else
+                c = c >>> 1;
+        }
+        table[i] = c >>> 0; // ensure unsigned
     }
-    return t;
-  })();
-
-  // CRC over a JavaScript string as UTF-8 bytes (safe for URLs and ANSI text)
-  function crc32_calc(str) {
-    var crc = -1; // 0xFFFFFFFF
-    for (var i = 0; i < str.length; i++) {
-      var code = str.charCodeAt(i);
-      if (code < 0x80) {
-        crc = (crc >>> 8) ^ TABLE[(crc ^ code) & 0xFF];
-      } else if (code < 0x800) {
-        crc = (crc >>> 8) ^ TABLE[(crc ^ (0xC0 | (code >> 6))) & 0xFF];
-        crc = (crc >>> 8) ^ TABLE[(crc ^ (0x80 | (code & 0x3F))) & 0xFF];
-      } else {
-        crc = (crc >>> 8) ^ TABLE[(crc ^ (0xE0 | (code >> 12))) & 0xFF];
-        crc = (crc >>> 8) ^ TABLE[(crc ^ (0x80 | ((code >> 6) & 0x3F))) & 0xFF];
-        crc = (crc >>> 8) ^ TABLE[(crc ^ (0x80 | (code & 0x3F))) & 0xFF];
-      }
-    }
-    return (crc ^ -1) >>> 0; // unsigned
-  }
-
-  function crc32_hex(str) {
-    var v = crc32_calc(str);
-    var h = v.toString(16).toUpperCase();
-    while (h.length < 8) h = '0' + h;
-    return h;
-  }
-
-  // expose to global
-  this.crc32_calc = crc32_calc;
-  this.crc32_hex = crc32_hex;
+    return table;
 })();
+
+/**
+ * Calculate CRC-32 of a string or byte array.
+ * @param {String|Array} input
+ * @returns {Number} Unsigned 32-bit CRC
+ */
+function crc32_calc(input) {
+    var crc = 0xFFFFFFFF;
+    var i, b, len;
+
+    if (input == null) return (crc ^ 0xFFFFFFFF) >>> 0;
+
+    if (typeof input === "string") {
+        len = input.length;
+        for (i = 0; i < len; i++) {
+            b = input.charCodeAt(i) & 0xFF;
+            crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ b) & 0xFF];
+        }
+    } else if (typeof input.length === "number") {
+        len = input.length;
+        for (i = 0; i < len; i++) {
+            b = input[i] & 0xFF;
+            crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ b) & 0xFF];
+        }
+    } else {
+        // Fallback: coerce to string
+        var s = String(input);
+        len = s.length;
+        for (i = 0; i < len; i++) {
+            b = s.charCodeAt(i) & 0xFF;
+            crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ b) & 0xFF];
+        }
+    }
+
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+// Optional helpers (safe to ignore)
+// Convert CRC number to 8-hex (uppercase) if you ever need it directly:
+// function crc32_hex(n) { return ("00000000" + (n >>> 0).toString(16)).slice(-8).toUpperCase(); }
