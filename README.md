@@ -10,26 +10,6 @@ The icon designs were inspired by the [wego](https://github.com/schachmat/wego) 
 
 ---
 
-## Screenshots
-
-Regular View:  
-![Regular View](http://bbs.kd3.us/screenshots/syncWX-screenshot-RI-01.png)
-
-With weather alert:  
-![Weather Alert 01](http://bbs.kd3.us/screenshots/syncWX-screenshot-RI-Alert-New-01.png)  
-![Weather Alert 02](http://bbs.kd3.us/screenshots/syncWX-screenshot-RI-Alert-New-02.png)  
-![Weather Alert 03](http://bbs.kd3.us/screenshots/syncWX-screenshot-RI-Alert-New-03.png)
-
-Non-US location (Celsius):  
-![Non-US Locale](http://bbs.kd3.us/screenshots/syncWX-screenshot-IT-Rome-Airport-01.png)
-
-TTY (Mono) ASCII mode with alert:  
-![TTY Mono ASCII](http://bbs.kd3.us/screenshots/TTY-Mono-ASCII-Only.png)
-
-[Full Color and Monochrome versions of the ASCII Icon Set](http://bbs.kd3.us/screenshots/syncWX-icon-set.png)
-
----
-
 ## Features
 
 - Uses the [NWS API](https://api.weather.gov) for U.S. forecasts, observations, and alerts.
