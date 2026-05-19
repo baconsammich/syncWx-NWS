@@ -22,12 +22,12 @@ load(js.exec_dir + "crc32.js", "C:\\sbbs\\xtrn\\syncWx-NWS\\crc32.js");
   weathericon_ext = .asc       ; icon file extension under xtrn/syncWx-NWS/icons
   ansi =                      ; true|false (force ANSI even if not detected)
 
-  ; Location (fallback if user City,ST is blank)
+  ; Location (fallback if user City,ST is blank or cannot be geocoded)
   latitude =
   longitude =
   location_name =
   use_user_location = true
-  country = US
+  country = US                 ; Nominatim country code, blank/all to disable
 
   ; Title (optional tdfiglet header when ANSI present)
   tdfiglet_font = tdf/roman.tdf   ; path under exec/ (blank to disable)
@@ -71,6 +71,8 @@ var RETRIES     = parseInt(opts.retries, 10) >= 0 ? parseInt(opts.retries, 10) :
 var CACHE_MIN   = parseInt(opts.cache_minutes, 10) >= 0 ? parseInt(opts.cache_minutes, 10) : 10;
 var PREF_UNITS  = (opts.units || "imperial").toLowerCase();
 var FORCE_ANSI  = (String(opts.ansi||"").toLowerCase() === "true");
+var USE_USER_LOCATION = (String(opts.use_user_location||"true").toLowerCase() !== "false");
+var GEO_COUNTRY = String(opts.country || "US").toLowerCase();
 
 var TDF_FONT    = String(opts.tdfiglet_font||"").trim();
 var TDF_WIDTH   = parseInt(opts.tdfiglet_width||78,10);
@@ -86,38 +88,45 @@ function termHasANSI(){
   try{ return console.term_supports && console.term_supports(USER_ANSI);}catch(_){ return false; }
 }
 function put(s){ try{ console.putmsg(s);}catch(_){ print(s);} }
+function optIsSet(v){ return typeof v !== "undefined" && v !== null && String(v).trim() !== ""; }
+function boolText(v, def){
+  if (!optIsSet(v)) return def;
+  return String(v).toLowerCase() === "true" || String(v) === "1" || String(v).toLowerCase() === "yes";
+}
 
-/* --------- Text Sanitation (fixes “gibberish” and non-CP437 chars) -------- */
+/* --------- Text Sanitation (fixes gibberish and non-CP437 chars) -------- */
 function asciiFold(s){
   if (!s) return "";
-  // normalize common Unicode punctuation/symbols to plain ASCII
-  s = s.replace(/[\u2018\u2019\u2032]/g,"'");          // ‘ ’ ′
-  s = s.replace(/[\u201C\u201D\u2033]/g,'"');          // “ ” ″
-  s = s.replace(/[\u2013\u2014\u2212]/g,"-");          // – — −
-  s = s.replace(/\u2026/g,"...");                      // …
-  s = s.replace(/\u00A0/g," ");                        // nbsp
-  s = s.replace(/\u00B0/g, degreeSymbol || "°");       // °
-  s = s.replace(/\u2122/g,"(TM)");                     // ™
-  s = s.replace(/\u00AE/g,"(R)");                      // ®
-  s = s.replace(/\u00A9/g,"(C)");                      // ©
+  s = s.replace(/[\u2018\u2019\u2032]/g,"'");
+  s = s.replace(/[\u201C\u201D\u2033]/g,'"');
+  s = s.replace(/[\u2013\u2014\u2212]/g,"-");
+  s = s.replace(/\u2026/g,"...");
+  s = s.replace(/\u00A0/g," ");
+  s = s.replace(/\u00B0/g, degreeSymbol || "deg");
+  s = s.replace(/\u2122/g,"(TM)");
+  s = s.replace(/\u00AE/g,"(R)");
+  s = s.replace(/\u00A9/g,"(C)");
   return s;
 }
 function stripNonAscii(s){
   if (!s) return "";
-  // Keep basic printable ASCII range only
   return s.replace(/[^\x20-\x7E]/g,"");
 }
 function cleanText(s){
   return stripNonAscii(asciiFold(String(s||"")));
 }
+function stripCtrlA(s){
+  if (!s) return "";
+  return String(s).replace(/\x01./g, "");
+}
 
 /* Colors */
 var C_RESET = "\x01n\x01w";
-var C_HDR   = "\x01h\x01c"; // bright cyan for header
-var C_INFO  = "\x01h\x01g"; // info/statement
-var C_WATCH = "\x01h\x01y"; // watch
-var C_WARN  = "\x01h\x01r"; // warning
-var C_ADV   = "\x01h\x01c"; // advisory (light blue)
+var C_HDR   = "\x01h\x01c";
+var C_INFO  = "\x01h\x01g";
+var C_WATCH = "\x01h\x01y";
+var C_WARN  = "\x01h\x01r";
+var C_ADV   = "\x01h\x01c";
 
 /* Compass */
 function degToCompass(deg){
@@ -205,6 +214,7 @@ function geocodeCityState(loc){
   if (!loc || typeof loc!=="string") return null;
   var q=encodeURIComponent(loc);
   var url="https://nominatim.openstreetmap.org/search?format=json&limit=1&q="+q;
+  if (GEO_COUNTRY && GEO_COUNTRY !== "all") url += "&countrycodes=" + encodeURIComponent(GEO_COUNTRY);
   var req=new HTTPRequest();
   req.max_redirects=3; req.timeout=TIMEOUT_S;
   req.RequestHeaders=[
@@ -247,20 +257,21 @@ function isUSDST(d){
     dt.setUTCDate(1+add);
     return dt;
   }
-  var dstStart=nthDow(2,2,0);   // March, 2nd Sun
-  var dstEnd  =nthDow(10,1,0);  // Nov, 1st Sun
+  var dstStart=nthDow(2,2,0);
+  var dstEnd  =nthDow(10,1,0);
   return d>=dstStart && d<dstEnd;
 }
 function tzOffsetMinutesUS(tzName, d){
   var dst=isUSDST(d);
   if (!tzName) return (new Date()).getTimezoneOffset()*-1;
   var n=tzName.toLowerCase();
-  if (n.indexOf("pacific")>=0)  return (dst?-420:-480);
-  if (n.indexOf("mountain")>=0) return (dst?-360:-420);
-  if (n.indexOf("central")>=0)  return (dst?-300:-360);
-  if (n.indexOf("eastern")>=0)  return (dst?-240:-300);
-  if (n.indexOf("alaska")>=0)   return (dst?-480:-540);
-  if (n.indexOf("hawaii")>=0)   return -600;
+  if (n.indexOf("america/phoenix")>=0) return -420;
+  if (n.indexOf("america/los_angeles")>=0 || n.indexOf("america/tijuana")>=0 || n.indexOf("pacific")>=0) return (dst?-420:-480);
+  if (n.indexOf("america/denver")>=0 || n.indexOf("america/boise")>=0 || n.indexOf("mountain")>=0) return (dst?-360:-420);
+  if (n.indexOf("america/chicago")>=0 || n.indexOf("america/indiana/knox")>=0 || n.indexOf("america/menominee")>=0 || n.indexOf("america/north_dakota")>=0 || n.indexOf("central")>=0) return (dst?-300:-360);
+  if (n.indexOf("america/new_york")>=0 || n.indexOf("america/detroit")>=0 || n.indexOf("america/indiana")>=0 || n.indexOf("america/kentucky")>=0 || n.indexOf("eastern")>=0) return (dst?-240:-300);
+  if (n.indexOf("america/anchorage")>=0 || n.indexOf("america/juneau")>=0 || n.indexOf("america/nome")>=0 || n.indexOf("america/sitka")>=0 || n.indexOf("america/yakutat")>=0 || n.indexOf("alaska")>=0) return (dst?-480:-540);
+  if (n.indexOf("pacific/honolulu")>=0 || n.indexOf("hawaii")>=0) return -600;
   return (new Date()).getTimezoneOffset()*-1;
 }
 function rad(d){return d*Math.PI/180;}
@@ -270,7 +281,7 @@ function sunTimes(lat,lon,date, tzName){
   try{
     function fromJulian(J){ return new Date((J-2440587.5)*86400000); }
     function pad(n){return (n<10?"0":"")+n;}
-    function hhmm(dt){ return pad(dt.getHours())+":"+pad(dt.getMinutes()); }
+    function hhmm(dt){ return pad(dt.getUTCHours())+":"+pad(dt.getUTCMinutes()); }
 
     var y=date.getUTCFullYear(), m=date.getUTCMonth()+1, d=date.getUTCDate();
     var J=julian(y,m,d), n=(J-2451545.0)-lon/360;
@@ -299,8 +310,24 @@ function sunTimes(lat,lon,date, tzName){
     else if (age<20.30228) phase="Waning Gibbous";
     else if (age<23.99361) phase="Last Quarter";
     else if (age<27.68493) phase="Waning Crescent";
-    return {sr:hhmm(rise), ss:hhmm(set), phase:phase};
-  }catch(e){ return {sr:"--:--", ss:"--:--", phase:"N/A"}; }
+    return {sr:hhmm(rise), ss:hhmm(set), phase:phase, offsetMin:offMin};
+  }catch(e){ return {sr:"--:--", ss:"--:--", phase:"N/A", offsetMin:0}; }
+}
+function localPointMinutes(astro){
+  var d = new Date();
+  var off = astro && typeof astro.offsetMin === "number" ? astro.offsetMin : ((new Date()).getTimezoneOffset()*-1);
+  var mins = d.getUTCHours()*60 + d.getUTCMinutes() + off;
+  mins = ((mins % 1440) + 1440) % 1440;
+  return mins;
+}
+function isPointDay(astro){
+  try{
+    function toMin(s){ var a=s.split(":"); return parseInt(a[0],10)*60+parseInt(a[1],10); }
+    var nowMin = localPointMinutes(astro);
+    var sr=toMin(astro.sr), ss=toMin(astro.ss);
+    if (ss > sr) return nowMin >= sr && nowMin < ss;
+    return nowMin >= sr || nowMin < ss;
+  }catch(_){ return true; }
 }
 
 /* ============================== Icons ===================================== */
@@ -318,17 +345,7 @@ function normalizeNwsIconToken(iconURL){
 function chooseOverrideIconToken(currentCond, astro){
   if (!currentCond || !astro) return null;
   var cond = String(currentCond).toLowerCase();
-  function isDay(){
-    try{
-      var now = new Date();
-      function toMin(s){ var a=s.split(":"); return parseInt(a[0],10)*60+parseInt(a[1],10); }
-      var nowMin = now.getHours()*60 + now.getMinutes();
-      var sr=toMin(astro.sr), ss=toMin(astro.ss);
-      if (ss > sr) return nowMin >= sr && nowMin < ss;
-      return nowMin >= sr || nowMin < ss;
-    }catch(_){ return true; }
-  }
-  var day = isDay();
+  var day = isPointDay(astro);
   if (/\bclear\b/.test(cond)) return day ? "sunny" : "nt_clear";
   if (/mostly sunny/.test(cond)) return day ? "mostlysunny" : "nt_mostlysunny";
   if (/mostly clear/.test(cond)) return day ? "mostlysunny" : "nt_mostlysunny";
@@ -425,7 +442,6 @@ function summarizeAlert(a){
     var name = a.properties && a.properties.event ? a.properties.event : "Alert";
     var until = a.properties && (a.properties.ends || a.properties.expires);
     var when = isoLocalDate(until);
-    // sanitize parts
     name = cleanText(name);
     return name + (when ? (" (until " + when + ")") : "");
   }catch(_){ return "Alert"; }
@@ -445,14 +461,15 @@ function alertColor(a){
 function printTitle(){
   if (termHasANSI() && TDF_FONT){
     try{
-      var fontPath = js.exec_dir + TDF_FONT;
-      if (file_exists(fontPath)){
+      var execDir = (typeof system !== "undefined" && system.exec_dir) ? backslash(system.exec_dir) : "";
+      var fontPath = execDir ? (execDir + TDF_FONT) : (js.exec_dir + TDF_FONT);
+      if (file_exists(fontPath) || file_exists(js.exec_dir + TDF_FONT)){
         var jexec = "?tdfiglet";
         var jalign = (TDF_ALIGN==="left")?"l":(TDF_ALIGN==="right")?"r":"c";
         var cmd = jexec + " -f " + TDF_FONT + " -j " + jalign + " -w " + TDF_WIDTH + " Local Weather Report";
         if (bbs && bbs.exec) bbs.exec(cmd);
         else print("Local Weather Report\r\n");
-        print("\r\n"); // blank line after title
+        print("\r\n");
         return;
       }
     }catch(_){}
@@ -464,7 +481,6 @@ function printTitle(){
 /* =============================== Main ==================================== */
 (function main(){
   try{
-    // User & location
     var curUserNum = (bbs && bbs.node_num) ? system.node_list[bbs.node_num-1].useron
                      : (user && user.number ? user.number : 1);
     var u = new User(curUserNum);
@@ -472,66 +488,70 @@ function printTitle(){
 
     printTitle();
 
-    // Coordinates
     var lat=null, lon=null, locLabel="Unknown";
-    if (opts.latitude && opts.longitude){
-      lat=parseFloat(opts.latitude); lon=parseFloat(opts.longitude);
-      locLabel = cleanText(opts.location_name || "Configured Location");
-    } else if (loc && loc.trim()!==""){
-      var g = geocodeCityState(loc);
-      if (g && !g.__err){ lat=g.lat; lon=g.lon; var parts=String(loc).split(","); locLabel=(parts.length>=2)?(cleanText(parts[0].trim()+", "+parts[1].trim())):cleanText(loc); }
-      else { print("Geocode failed ("+(g?g.__err:"unknown")+")\r\n"); safePause(); return; }
-    } else { print("No user location (set City/State or configure lat/lon in modopts.ini)\r\n"); safePause(); return; }
+    var cfgLat = optIsSet(opts.latitude) ? parseFloat(opts.latitude) : NaN;
+    var cfgLon = optIsSet(opts.longitude) ? parseFloat(opts.longitude) : NaN;
+    var hasConfiguredLocation = !isNaN(cfgLat) && !isNaN(cfgLon);
+    var geocodeFailure = null;
 
-    // /points
+    if (USE_USER_LOCATION && loc && loc.trim()!==""){
+      var g = geocodeCityState(loc);
+      if (g && !g.__err && !isNaN(g.lat) && !isNaN(g.lon)){
+        lat=g.lat; lon=g.lon;
+        var parts=String(loc).split(",");
+        locLabel=(parts.length>=2)?(cleanText(parts[0].trim()+", "+parts[1].trim())):cleanText(loc);
+      } else {
+        geocodeFailure = g ? g.__err : "unknown";
+      }
+    }
+
+    if ((lat===null || lon===null) && hasConfiguredLocation){
+      lat=cfgLat; lon=cfgLon;
+      locLabel = cleanText(opts.location_name || "Configured Location");
+    }
+
+    if (lat===null || lon===null){
+      if (geocodeFailure) print("Geocode failed ("+geocodeFailure+")\r\n");
+      else print("No user location (set City/State or configure lat/lon in modopts.ini)\r\n");
+      safePause(); return;
+    }
+
     var points = fetchPoints(lat,lon);
     if (!points.ok){ print("/points request failed: "+points.failure.err+"\r\n"); safePause(); return; }
     var props = points.json.properties;
     var forecastURL       = props.forecast;
-    var forecastHourlyURL = props.forecastHourly;
     var obsStationsURL    = props.observationStations;
     var POINT_TZ          = props.timeZone || "";
 
-    // forecasts
     var fc = getJSON(forecastURL, "application/geo+json");
-    var fh = getJSON(forecastHourlyURL, "application/geo+json");
 
-    // station & latest observation
     var st = getJSON(obsStationsURL, "application/geo+json");
     var latest = null;
     if (!st.__transport_error && st.features && st.features.length){
-      var sid = st.features[0].properties.stationIdentifier || null;
-      if (sid){
-        latest = getJSON("https://api.weather.gov/stations/"+sid+"/observations/latest", "application/geo+json");
+      var si;
+      for (si=0; si<st.features.length; si++){
+        var sid = st.features[si].properties.stationIdentifier || null;
+        if (!sid) continue;
+        var candidate = getJSON("https://api.weather.gov/stations/"+sid+"/observations/latest", "application/geo+json");
+        if (candidate && !candidate.__transport_error && candidate.properties){ latest = candidate; break; }
       }
     }
 
-    // Alerts
     var alertsURL = "https://api.weather.gov/alerts/active?point="+lat+","+lon;
     var alerts = (ALERTS_MAX>0) ? getJSON(alertsURL, "application/geo+json") : {features:[]};
 
-    // Astronomy
     var astro = sunTimes(lat, lon, new Date(), POINT_TZ);
 
-    // Layout
     var rightX = 22;
     var topY   = 3;
 
-    // Current obs & values
     var cond="N/A", tempPair={f:null,c:null}, windTxt="N/A", rhTxt="", dpTxt="";
     var iconOverride=null, todHint="";
     if (latest && !latest.__transport_error){
       try{
         cond = cleanText(latest.properties.textDescription || "N/A");
         iconOverride = chooseOverrideIconToken(cond, astro);
-
-        (function(){
-          function toMin(s){ var a=s.split(":"); return parseInt(a[0],10)*60+parseInt(a[1],10); }
-          var now = new Date(); var nowMin = now.getHours()*60 + now.getMinutes();
-          var sr=toMin(astro.sr), ss=toMin(astro.ss);
-          var isDay = (ss>sr) ? (nowMin>=sr && nowMin<ss) : (nowMin>=sr || nowMin<ss);
-          todHint = isDay ? "day" : "night";
-        })();
+        todHint = isPointDay(astro) ? "day" : "night";
 
         var t = latest.properties.temperature;
         if (t && typeof t.value==="number") { tempPair = asTemp(t.value); }
@@ -559,7 +579,6 @@ function printTitle(){
       }catch(e){}
     }
 
-    // Icon (after we know override)
     if (termHasANSI() && !fc.__transport_error) {
       var iconURL=null;
       try{
@@ -572,8 +591,8 @@ function printTitle(){
       }
     }
 
-    // Alerts summary pieces (sanitized), one per line
     var alertParts = [];
+    var alertPlainParts = [];
     var anyAlerts = false;
     if (!alerts.__transport_error && alerts.features && alerts.features.length){
       var take = Math.min(ALERTS_MAX, alerts.features.length);
@@ -581,16 +600,15 @@ function printTitle(){
       for (i=0;i<take;i++){
         var a = alerts.features[i];
         var col = alertColor(a);
-        var s = summarizeAlert(a); // already sanitized
+        var s = summarizeAlert(a);
         alertParts.push(col + s + C_RESET);
+        alertPlainParts.push(s);
       }
       anyAlerts = alertParts.length>0;
     }
 
-    // Body colors
     var gy="\x01n\x01w", wh="\x01h\x01w", yl="\x01h\x01y";
 
-    /* ========================= Output (ANSI) ========================= */
     if (termHasANSI()) {
       function line(y, label, value){ console.gotoxy(rightX, y); put(wh + label + yl + value); }
       line(topY,   LocationHeader,   locLabel);
@@ -600,33 +618,28 @@ function printTitle(){
       line(topY+4, LunarHeader,      astro.phase);
       line(topY+5, WindHeader,       windTxt + rhTxt + dpTxt);
 
-      // BLANK LINE BEFORE ALERTS
       console.gotoxy(1, topY+6);
       put("\r\n");
 
-      // WX ALERT banner at far-left with white bg + bright red fg
       console.gotoxy(1, topY+7);
       if (anyAlerts && ALERTS_BEEP) put("\x07");
-      // “WX ALERT” label; rest of content goes on same line or next lines
       put("\x1b[47m\x1b[1;31m WX ALERT:\x1b[0m ");
 
       if (alertParts.length>0) {
         put(alertParts[0] + "\r\n");
         var j;
         for (j=1;j<alertParts.length;j++){
-          put("           " + alertParts[j] + "\r\n"); // indent subsequent lines
+          put("           " + alertParts[j] + "\r\n");
         }
       } else {
         put(yl + "None active" + C_RESET + "\r\n");
       }
 
-      // BLANK LINE AFTER ALERTS
       put("\r\n");
 
-      // Forecast (first 3 periods)
       var y = topY + 10;
       if (!fc.__transport_error && fc.properties && fc.properties.periods && fc.properties.periods.length){
-        var maxShow=Math.min(3, fc.properties.periods.length);
+        var maxShow=Math.min(4, fc.properties.periods.length);
         var k;
         for (k=0;k<maxShow;k++){
           var p=fc.properties.periods[k];
@@ -651,7 +664,6 @@ function printTitle(){
         }
       }
 
-      // Footer (colored text only)
       put(
         "\r\n" +
         "\x01h\x01y" + "syncWx-NWS v2.6" + C_RESET + " | " +
@@ -660,7 +672,6 @@ function printTitle(){
         C_RESET + "\r\n"
       );
 
-      // Prompt to view full alert text
       if (anyAlerts){
         put("\r\n" + "\x01h\x01y" + "View full alert text? (Y/N): " + C_RESET);
         var k2 = console.getkey(K_UPPER);
@@ -691,17 +702,16 @@ function printTitle(){
       safePause();
 
     } else {
-      /* ========================= Output (ASCII) ========================= */
       put(LocationHeader + locLabel + "\r\n");
       put(ConditionsHeader + cond + "\r\n");
       put(TempHeader + fmtTempPair(tempPair) + "\r\n");
       put(SunHeader + astro.sr + " / " + astro.ss + "\r\n");
       put(LunarHeader + astro.phase + "\r\n");
       put(WindHeader + windTxt + rhTxt + dpTxt + "\r\n");
-      put("\r\n" + "WX ALERT: " + (anyAlerts ? stripNonAscii(alertParts.join(" | ")) : "None active") + "\r\n\r\n");
+      put("\r\n" + "WX ALERT: " + (anyAlerts ? alertPlainParts.join(" | ") : "None active") + "\r\n\r\n");
 
       if (!fc.__transport_error && fc.properties && fc.properties.periods && fc.properties.periods.length){
-        var maxShow2=Math.min(3, fc.properties.periods.length);
+        var maxShow2=Math.min(4, fc.properties.periods.length);
         var m;
         for (m=0;m<maxShow2;m++){
           var pp=fc.properties.periods[m];
