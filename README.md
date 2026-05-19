@@ -14,7 +14,7 @@ The icon designs were inspired by the [wego](https://github.com/schachmat/wego) 
 
 - Uses the [NWS API](https://api.weather.gov) for U.S. forecasts, observations, and alerts.
 - Detects the BBS caller's **City, State** and automatically geocodes it to latitude/longitude.
-- Falls back to configured coordinates in `modopts.ini` if no location is set.
+- Falls back to configured coordinates in `modopts.ini` if no user location is set or geocoding fails.
 - Displays current conditions, temperature (F & C), sunrise/sunset, lunar phase, wind.
 - Shows 4 forecast periods with icons.
 - Works in ANSI and plain ASCII modes.
@@ -28,8 +28,10 @@ The icon designs were inspired by the [wego](https://github.com/schachmat/wego) 
 
 1. **Copy the files**  
    Place the following files into your Synchronet directories:
-   - `weather.js` → `/sbbs/xtrn/syncWx-NWS/`
-   - `icons/` → `/sbbs/xtrn/syncWx-NWS/icons/`
+   - `weather.js` -> `/sbbs/xtrn/syncWx-NWS/`
+   - `crc32.js` -> `/sbbs/xtrn/syncWx-NWS/`
+   - `wxlanguage.js` -> `/sbbs/xtrn/syncWx-NWS/` (optional language strings)
+   - `icons/` -> `/sbbs/xtrn/syncWx-NWS/icons/`
    - `SYSOP.txt`, `LICENSE`, and `README.md` in the same directory for reference.
 
 2. **Configure modopts.ini**  
@@ -39,6 +41,8 @@ The icon designs were inspired by the [wego](https://github.com/schachmat/wego) 
    user_agent = RetroMafia BBS (sysop: hello@retrogoldbbs.com)
    email = hello@retrogoldbbs.com
    weathericon_ext = .asc
+   use_user_location = true
+   country = US
    ```
 
 3. **Install in SCFG**  
@@ -98,7 +102,7 @@ The icon designs were inspired by the [wego](https://github.com/schachmat/wego) 
                 break;
             }
         }
-        if(!launched) dbg("NOT FOUND — verify weather.js is at C:\\sbbs\\xtrn\\syncWx-NWS\\weather.js");
+        if(!launched) dbg("NOT FOUND - verify weather.js is at C:\\sbbs\\xtrn\\syncWx-NWS\\weather.js");
         if(options.syncwx_debug) console.crlf();
     }catch(e){
         dbg("hook error: " + e);
@@ -113,20 +117,20 @@ The icon designs were inspired by the [wego](https://github.com/schachmat/wego) 
 [CVS Commit for the fix](http://cvs.synchro.net/commitlog.ssjs#32554)
 
 **Q:** How does fallback work?  
-**A:** If no location is found, the script uses the fallback location from `modopts.ini`.
+**A:** If `use_user_location = true`, the script tries the caller's location first. If that is blank or cannot be geocoded, it uses the fallback latitude/longitude from `modopts.ini`. Set `use_user_location = false` to always use the configured coordinates.
 
 **Q:** Why does UV Index say N/A?  
 **A:** NWS API does not currently provide UV index in the standard forecast JSON.
 
 **Q:** Can it work for non-U.S. locations?  
-**A:** No, the NWS API is U.S.-only.
+**A:** No, the NWS API is U.S.-only. The `country = US` setting keeps geocoding scoped to U.S. results by default.
 
 ---
 
 ## License
 
 Copyright (c) 2025, Patrick Bass <patrick@pwbass.com>  
-Portions originally (c) 2015, Kenny DiBattista <kendb3@bbs.kd3.us>  
+Portions originally (c) 2015, Kenny DiBattista <kendb3@bbs.kd3.us>
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
